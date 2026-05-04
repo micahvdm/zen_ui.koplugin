@@ -8,6 +8,7 @@ local function apply_browser_show_hidden()
     -- genItemTable only receives pre-filtered lists, so hooking it is too late.
 
     local FileChooser = require("ui/widget/filechooser")
+    local paths       = require("common/paths")
 
     local zen_plugin = rawget(_G, "__ZEN_UI_PLUGIN")
     if not zen_plugin or type(zen_plugin.config) ~= "table" then
@@ -19,15 +20,11 @@ local function apply_browser_show_hidden()
             and zen_plugin.config.developer.show_hidden_outside_home == true
     end
 
-    local function get_home_dir()
-        return G_reader_settings:readSetting("home_dir")
-            or require("apps/filemanager/filemanagerutil").getDefaultDir()
-    end
-
     local function is_at_or_below_home(path)
-        local home = get_home_dir()
+        local home = paths.getHomeDir()
         if not home or not path then return true end
-        return path == home or path:sub(1, #home + 1) == home .. "/"
+        local norm = paths.normPath(path:gsub("/$", ""))
+        return norm == home or norm:sub(1, #home + 1) == home .. "/"
     end
 
     local orig_getList = FileChooser.getList

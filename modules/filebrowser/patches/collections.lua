@@ -44,9 +44,16 @@ local function apply_collections()
     -- Display mode setup: match the filemanager display mode setting
     -- Returns the mode type ("mosaic", "list") or "classic" / false
     ---------------------------------------------------------------------------
+    -- Pre-cached display mode: set in onShowColl before orig call so Menu:init uses
+    -- the correct value even if CoverBrowser overwrites collection_display_mode in DB.
+    local _coll_display_mode_override = nil
+
     local function setup_display_mode(menu)
         local BookInfoManager = require("bookinfomanager")
-        local display_mode = BookInfoManager:getSetting("filemanager_display_mode")
+        -- Use pre-cached mode if available (set before orig_onShowColl to survive
+        -- CoverBrowser overwriting the DB during updateCollectionFromFolder).
+        local display_mode = _coll_display_mode_override
+            or BookInfoManager:getSetting("collection_display_mode")
         menu._zen_coll_list = true
 
         if not display_mode then
@@ -92,6 +99,10 @@ local function apply_collections()
         if not menu.resetBookInfoCache then
             menu.resetBookInfoCache = function() end
         end
+
+        -- Prevent CoverBrowser's getUpdateItemTableFunc from overwriting these instance patches
+        menu._coverbrowser_overridden = true
+
 
         return display_mode_type
     end
@@ -339,8 +350,9 @@ local function apply_collections()
             local underline_h  = 1
             local dimen_h      = self.height - 2 * underline_h
             local border_size  = Size.border.thin
+            local cover_v_pad  = Screen:scaleBySize(4)  -- matches bll top+bottom padding
             local cover_zone_w = dimen_h
-            local max_img      = dimen_h - 2 * border_size
+            local max_img      = dimen_h - 2 * border_size - 2 * cover_v_pad
             local cover_w      = math.floor(max_img * 2 / 3)
 
             local function _fontSize(nominal, max_size)
@@ -587,6 +599,74 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
+    -- Shared sort submenu for any collection context menu
+    ---------------------------------------------------------------------------
+    local function show_coll_sort_submenu(coll_name, close_parent, on_sort_applied)
+        local ReadCollection = require("readcollection")
+        local ButtonDialog   = require("ui/widget/buttondialog")
+        local UIManager_ss   = require("ui/uimanager")
+        local _g             = require("gettext")
+
+        close_parent()
+
+        local sort_dialog
+        local sort_buttons  = {}
+        local coll_settings = ReadCollection.coll_settings[coll_name]
+        local current       = coll_settings and coll_settings.collate
+
+        local SORT_OPTIONS = {
+            { key = "title",    text = "\u{F04BB}  " .. _g("Title")         },
+            { key = "authors",  text = "\u{F0013}  " .. _g("Authors")       },
+            { key = "series",   text = "\u{F0436}  " .. _g("Series")        },
+            { key = "access",   text = "\u{F02DA}  " .. _g("Recently read") },
+            { key = "keywords", text = "\u{F12F7}  " .. _g("Keywords")      },
+        }
+
+        for _i, opt in ipairs(SORT_OPTIONS) do
+            local is_active = current == opt.key
+            table.insert(sort_buttons, {{
+                text     = opt.text .. (is_active and "  \u{2713}" or ""),
+                align    = "left",
+                enabled  = not is_active,
+                callback = function()
+                    UIManager_ss:close(sort_dialog)
+                    if coll_settings then
+                        coll_settings.collate = opt.key
+                        coll_settings.collate_reverse = nil
+                    end
+                    if on_sort_applied then on_sort_applied() end
+                end,
+            }})
+        end
+        table.insert(sort_buttons, {{
+            text     = "\u{F04BF}  " .. _g("Order") .. "  \u{25B6}",
+            align    = "left",
+            callback = function()
+                UIManager_ss:close(sort_dialog)
+                local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+                local fm = ok_fm and FM and FM.instance
+                if not fm then return end
+                local cur_rev = coll_settings and coll_settings.collate_reverse or false
+                fm.file_chooser:showSortOrderDialog({
+                    current_reverse = cur_rev,
+                    on_select       = function(reverse)
+                        if coll_settings then
+                            coll_settings.collate_reverse = reverse or nil
+                        end
+                        if on_sort_applied then on_sort_applied() end
+                    end,
+                })
+            end,
+        }})
+        sort_dialog = ButtonDialog:new{
+            title       = _g("Sort collection by"),
+            title_align = "center",
+            buttons     = sort_buttons,
+        }
+        UIManager_ss:show(sort_dialog)
+    end
+
+    ---------------------------------------------------------------------------
     -- Context menus
     ---------------------------------------------------------------------------
 
@@ -611,78 +691,6 @@ local function apply_collections()
             for _, it in pairs(coll) do table.insert(sorted, it) end
             table.sort(sorted, function(a, b) return (a.order or 0) < (b.order or 0) end)
             for _, it in ipairs(sorted) do table.insert(files, it.file) end
-        end
-
-        -- Sort submenu (collections-specific collate fields)
-        local SORT_OPTIONS = {
-            { key = "title",    text = "\u{F04BB}  " .. _("Title")         },
-            { key = "authors",  text = "\u{F0013}  " .. _("Authors")       },
-            { key = "series",   text = "\u{F0436}  " .. _("Series")        },
-            { key = "access",   text = "\u{F02DA}  " .. _("Recently read") },
-            { key = "keywords", text = "\u{F12F7}  " .. _("Keywords")      },
-        }
-
-        local function showSortSubmenu(close_parent)
-            close_parent()
-            local sort_dialog
-            local sort_buttons = {}
-            local coll_settings = ReadCollection.coll_settings[coll_name]
-            local current = coll_settings and coll_settings.collate
-
-            for _, opt in ipairs(SORT_OPTIONS) do
-                local is_active = current == opt.key
-                table.insert(sort_buttons, {{
-                    text     = opt.text .. (is_active and "  \u{2713}" or ""),
-                    align    = "left",
-                    enabled  = not is_active,
-                    callback = function()
-                        UIManager_cm:close(sort_dialog)
-                        if coll_settings then
-                            coll_settings.collate = opt.key
-                            coll_settings.collate_reverse = nil
-                        end
-                    end,
-                }})
-            end
-            local manual_active = current == nil
-            table.insert(sort_buttons, {{
-                text     = "\u{F035B}  " .. _("Manual") .. (manual_active and "  \u{2713}" or ""),
-                align    = "left",
-                enabled  = not manual_active,
-                callback = function()
-                    UIManager_cm:close(sort_dialog)
-                    if coll_settings then
-                        coll_settings.collate = nil
-                        coll_settings.collate_reverse = nil
-                    end
-                end,
-            }})
-            -- Order submenu
-            table.insert(sort_buttons, {{
-                text     = "\u{F04BF}  " .. _("Order") .. "  ▶",
-                align    = "left",
-                callback = function()
-                    UIManager_cm:close(sort_dialog)
-                    local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
-                    local fm = ok_fm and FM and FM.instance
-                    if not fm then return end
-                    local cur_rev = coll_settings and coll_settings.collate_reverse or false
-                    fm.file_chooser:showSortOrderDialog({
-                        current_reverse = cur_rev,
-                        on_select       = function(reverse)
-                            if coll_settings then
-                                coll_settings.collate_reverse = reverse or nil
-                            end
-                        end,
-                    })
-                end,
-            }})
-            sort_dialog = ButtonDialog:new{
-                title       = _("Sort collection by"),
-                title_align = "center",
-                buttons     = sort_buttons,
-            }
-            UIManager_cm:show(sort_dialog)
         end
 
         -- Extra buttons appended after Sort in the shared showFileDialog dialog
@@ -730,7 +738,7 @@ local function apply_collections()
                 _zen_group_subtitle = book_count == 1 and _("1 book")
                                       or (tostring(book_count) .. " " .. _("books")),
                 -- dialog closed before sort_cb fires, so close_parent is a no-op
-                _zen_sort_cb        = function() showSortSubmenu(function() end) end,
+                _zen_sort_cb        = function() show_coll_sort_submenu(coll_name, function() end) end,
                 _zen_extra_buttons  = extra_buttons,
             })
         else
@@ -740,12 +748,133 @@ local function apply_collections()
                 {{
                     text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
                     align    = "left",
-                    callback = function() showSortSubmenu(function() UIManager_cm:close(button_dialog) end) end,
+                    callback = function() show_coll_sort_submenu(coll_name, function() UIManager_cm:close(button_dialog) end) end,
                 }},
             }
             for _, row in ipairs(extra_buttons) do table.insert(buttons, row) end
             button_dialog = ButtonDialog:new{ buttons = buttons }
             UIManager_cm:show(button_dialog)
+        end
+        return true
+    end
+
+    ---------------------------------------------------------------------------
+    -- Blank-space context menu inside a NAMED collection's book list
+    ---------------------------------------------------------------------------
+    local function show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, display_name)
+        local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
+        local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
+        if type(ft) == "table" and ft.lockdown_mode == true
+                and type(lc) == "table" and lc.disable_context_menu == true then
+            return
+        end
+
+        local ButtonDialog   = require("ui/widget/buttondialog")
+        local ReadCollection = require("readcollection")
+        local UIManager_nb   = require("ui/uimanager")
+        local util           = require("util")
+        local _              = require("gettext")
+
+        local coll       = ReadCollection.coll[raw_coll_name]
+        local book_count = coll and util.tableSize(coll) or 0
+
+        -- Ordered file list for gallery covers
+        local files = {}
+        if coll then
+            local sorted = {}
+            for _, it in pairs(coll) do table.insert(sorted, it) end
+            table.sort(sorted, function(a, b) return (a.order or 0) < (b.order or 0) end)
+            for _, it in ipairs(sorted) do table.insert(files, it.file) end
+        end
+
+        local function reopen_collection()
+            if menu then UIManager_nb:close(menu) end
+            fm_coll:onShowColl(raw_coll_name)
+        end
+
+        -- Display submenu (caller must close the parent dialog first)
+        local function showDisplaySubmenu()
+            local ok_bim, bim = pcall(require, "bookinfomanager")
+            local cur_mode
+            if ok_bim and bim then
+                local ok3, m = pcall(function()
+                    return bim:getSetting("collection_display_mode")
+                end)
+                if ok3 then cur_mode = m end
+            end
+            local function apply_mode(mode)
+                local cb = fm_coll.ui and fm_coll.ui.coverbrowser
+                if cb and type(cb.setupWidgetDisplayMode) == "function" then
+                    pcall(cb.setupWidgetDisplayMode, "collections", mode)
+                elseif ok_bim and bim then
+                    pcall(bim.saveSetting, bim, "collection_display_mode", mode)
+                end
+            end
+            local view_dialog
+            local function viewBtn(label, icon, mode)
+                local active = cur_mode == mode
+                return {{
+                    text     = icon .. "  " .. label .. (active and "  \u{2713}" or ""),
+                    align    = "left",
+                    enabled  = not active,
+                    callback = function()
+                        UIManager_nb:close(view_dialog)
+                        apply_mode(mode)
+                        reopen_collection()
+                    end,
+                }}
+            end
+            view_dialog = ButtonDialog:new{
+                title       = _("Display mode"),
+                title_align = "center",
+                buttons     = {
+                    viewBtn(_("Mosaic"),          "\u{F00A}", "mosaic_image"),
+                    viewBtn(_("List (detailed)"), "\u{F03A}", "list_image_meta"),
+                    viewBtn(_("List (basic)"),    "\u{F0CA}", "list_image_filename"),
+                },
+            }
+            UIManager_nb:show(view_dialog)
+        end
+
+        -- Reuse showFileDialog (context_menu.lua) for gallery header + button group
+        local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+        local fm = ok_fm and FM and FM.instance
+        if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
+            fm.file_chooser:showFileDialog({
+                _zen_group_files    = files,
+                _zen_group_name     = display_name,
+                _zen_group_subtitle = book_count == 1 and _("1 book")
+                                      or (tostring(book_count) .. " " .. _("books")),
+                -- context_menu.lua closes the dialog before invoking these callbacks
+                _zen_sort_cb        = function()
+                    show_coll_sort_submenu(raw_coll_name, function() end, reopen_collection)
+                end,
+                _zen_display_cb     = showDisplaySubmenu,
+            })
+        else
+            -- Fallback: plain button dialog
+            local button_dialog
+            local buttons = {
+                {{
+                    text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
+                    align    = "left",
+                    callback = function()
+                        show_coll_sort_submenu(raw_coll_name,
+                            function() UIManager_nb:close(button_dialog) end,
+                            reopen_collection)
+                    end,
+                }},
+                {{
+                    text     = "\u{F06D0}  " .. _("Display") .. "  \u{25B8}",
+                    align    = "left",
+                    callback = function()
+                        UIManager_nb:close(button_dialog)
+                        showDisplaySubmenu()
+                    end,
+                }},
+            }
+            button_dialog = ButtonDialog:new{ buttons = buttons }
+            UIManager_nb:show(button_dialog)
         end
         return true
     end
@@ -766,20 +895,20 @@ local function apply_collections()
         local function showDisplaySubmenu()
             UIManager_bm:close(button_dialog)
             local ok_bim, bim = pcall(require, "bookinfomanager")
-            local ok_fm, FM   = pcall(require, "apps/filemanager/filemanager")
-            local fm          = ok_fm and FM and FM.instance
             local cur_mode
             if ok_bim and bim then
                 local ok3, m = pcall(function()
-                    return bim:getSetting("filemanager_display_mode")
+                    return bim:getSetting("collection_display_mode")
                 end)
                 if ok3 then cur_mode = m end
             end
             local function apply_mode(mode)
-                if fm and type(fm.onSetDisplayMode) == "function" then
-                    pcall(fm.onSetDisplayMode, fm, mode)
+                -- Use CoverBrowser to apply new mode (saves to DB + repatches updateItemTable)
+                local cb = fm_coll.ui and fm_coll.ui.coverbrowser
+                if cb and type(cb.setupWidgetDisplayMode) == "function" then
+                    pcall(cb.setupWidgetDisplayMode, "collections", mode)
                 elseif ok_bim and bim then
-                    pcall(bim.saveSetting, bim, "filemanager_display_mode", mode)
+                    pcall(bim.saveSetting, bim, "collection_display_mode", mode)
                 end
             end
             local view_dialog
@@ -851,18 +980,20 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Flag set during onShowCollList so Menu:init can detect coll_list creation
+    -- Flags set during show calls so Menu:init can detect which menu is being created
     ---------------------------------------------------------------------------
-    local _patching_coll_list = false
+    local _patching_coll_list  = false
+    local _patching_named_coll = false
 
     ---------------------------------------------------------------------------
     -- Menu:init hook — minimal TitleBar + optional mosaic setup
     ---------------------------------------------------------------------------
     local orig_menu_init = Menu.init
     function Menu:init()
-        local should_patch = is_enabled() and should_match_statusbar_height()
-            and (self.name == "collections" or _patching_coll_list)
-        if should_patch then
+        local is_coll_menu = _patching_coll_list or _patching_named_coll
+        local should_patch_titlebar = is_enabled() and should_match_statusbar_height()
+            and (self.name == "collections" or is_coll_menu)
+        if should_patch_titlebar then
             local TitleBar    = require("ui/widget/titlebar")
             local orig_tb_new = TitleBar.new
             TitleBar.new = function(cls, t)
@@ -885,18 +1016,18 @@ local function apply_collections()
             end
             orig_menu_init(self)
             TitleBar.new = orig_tb_new
-
-            -- For the collections list, set up display mode BEFORE any updateItems
-            if _patching_coll_list then
-                local mode_type = setup_display_mode(self)
-                if mode_type == "mosaic" then
-                    patch_mosaic_item()
-                elseif mode_type == "list" then
-                    patch_list_item()
-                end
-            end
         else
             orig_menu_init(self)
+        end
+
+        -- Apply collection display mode regardless of titlebar config
+        if is_enabled() and is_coll_menu then
+            local mode_type = setup_display_mode(self)
+            if mode_type == "mosaic" then
+                patch_mosaic_item()
+            elseif mode_type == "list" then
+                patch_list_item()
+            end
         end
     end
 
@@ -916,7 +1047,7 @@ local function apply_collections()
     ---------------------------------------------------------------------------
     -- clean_nav: customises a NAMED collection's booklist_menu
     ---------------------------------------------------------------------------
-    local function clean_nav(menu, collection_name)
+    local function clean_nav(menu, collection_name, raw_coll_name, fm_coll)
         if not menu then return end
 
         local UIManager_mod = require("ui/uimanager")
@@ -931,6 +1062,29 @@ local function apply_collections()
                 return true
             end
             if orig_onMenuHold then return orig_onMenuHold(self_menu, item, pos) end
+        end
+
+        -- Blank-space hold: sort and display options for this collection
+        if fm_coll then
+            local Device         = require("device")
+            if Device:isTouchDevice() then
+                local GestureRange_g = require("ui/gesturerange")
+                local Geom_g         = require("ui/geometry")
+                if not menu.ges_events then menu.ges_events = {} end
+                menu.ges_events.ZenNamedCollBlankHold = {
+                    GestureRange_g:new{
+                        ges   = "hold",
+                        range = Geom_g:new{
+                            x = 0, y = 0,
+                            w = Device.screen:getWidth(),
+                            h = Device.screen:getHeight(),
+                        },
+                    },
+                }
+                menu.onZenNamedCollBlankHold = function()
+                    return show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, collection_name)
+                end
+            end
         end
 
         menu._do_center_partial_rows = false
@@ -1065,19 +1219,19 @@ local function apply_collections()
             or resolved_name == nil
             or (ok and resolved_name == ReadCollection.default_collection_name)
 
-        if is_enabled() and self.ui then
-            local coverbrowser = self.ui.coverbrowser
-            if coverbrowser and type(coverbrowser.setupWidgetDisplayMode) == "function" then
-                local BookInfoManager = require("bookinfomanager")
-                local fm_mode   = BookInfoManager:getSetting("filemanager_display_mode")
-                local coll_mode = BookInfoManager:getSetting("collection_display_mode")
-                if fm_mode ~= coll_mode then
-                    coverbrowser.setupWidgetDisplayMode("collections", fm_mode)
-                end
+        if is_enabled() then
+            -- Cache mode now; CoverBrowser may overwrite collection_display_mode in DB
+            -- during updateCollectionFromFolder (called inside orig_onShowColl before
+            -- BookList:new), so Menu:init must not read from DB.
+            local ok_bim, bim = pcall(require, "bookinfomanager")
+            if ok_bim then
+                _coll_display_mode_override = bim:getSetting("collection_display_mode")
             end
+            _patching_named_coll = true
         end
-
         orig_onShowColl(self, collection_name)
+        _patching_named_coll = false
+        _coll_display_mode_override = nil
 
         if not is_enabled() then return end
 
@@ -1091,7 +1245,7 @@ local function apply_collections()
             display_name = _("Favorites")
         end
 
-        clean_nav(self.booklist_menu, display_name)
+        clean_nav(self.booklist_menu, display_name, collection_name, self)
     end
 
     ---------------------------------------------------------------------------
@@ -1112,8 +1266,8 @@ local function apply_collections()
     function FileManagerCollection:onShowCollList(file_or_selected_collections, caller_callback, no_dialog)
         local is_browse = file_or_selected_collections == nil
 
-        -- Set flag so Menu:init creates minimal TitleBar + sets up mosaic
-        if is_browse and is_enabled() and should_match_statusbar_height() then
+        -- Set flag so Menu:init sets up display mode (+ minimal TitleBar when status bar is active)
+        if is_browse and is_enabled() then
             _patching_coll_list = true
         end
 

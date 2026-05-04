@@ -5,6 +5,7 @@
 local _ = require("gettext")
 local UIManager = require("ui/uimanager")
 local Device = require("device")
+local paths = require("common/paths")
 
 local M = {}
 
@@ -293,11 +294,6 @@ end
 -- ---------------------------------------------------------------------------
 -- Navigation helpers
 -- ---------------------------------------------------------------------------
-
-function M.get_home_dir()
-    return G_reader_settings:readSetting("home_dir")
-        or require("apps/filemanager/filemanagerutil").getDefaultDir()
-end
 
 function M.get_last_dir()
     return G_reader_settings:readSetting("lastdir") or "/"

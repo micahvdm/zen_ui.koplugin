@@ -104,6 +104,19 @@ local function apply_browser_page_count()
         end
         local _uv_fn = find_uv_fn(orig_paintTo)
 
+        local _cached_badge_scale    = 1.0
+        local _cached_badge_size_key = false
+        local function get_badge_scale()
+            local cur = _plugin and type(_plugin.config) == "table"
+                and type(_plugin.config.browser_cover_badges) == "table"
+                and _plugin.config.browser_cover_badges.badge_size or false
+            if cur ~= _cached_badge_size_key then
+                _cached_badge_size_key = cur
+                _cached_badge_scale    = utils.getBadgeScale(_plugin and _plugin.config)
+            end
+            return _cached_badge_scale
+        end
+        local _page_count_log_done = false
         function MosaicMenuItem:paintTo(bb, x, y)
             -- 1. Paint cover + all badge layers from previous patches.
             orig_paintTo(self, bb, x, y)
@@ -133,10 +146,23 @@ local function apply_browser_page_count()
             -- Read corner_mark_size fresh each paint so it tracks layout changes.
             local corner_mark_size = (_uv_fn and _uv_fn("corner_mark_size"))
                 or Screen:scaleBySize(20)
-            local eff_size = math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+            local eff_size = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+                * get_badge_scale())
             local cover_left   = x + math.floor((self.width - target.dimen.w) / 2)
-            local cover_bottom = y + self.height
-                - math.floor((self.height - target.dimen.h) / 2)
+            -- Use absolute coords so cover_bottom stays correct when a title strip
+            -- below the cover inflates self.height beyond the actual image area.
+            local cover_bottom = target.dimen.y + target.dimen.h
+
+            if not _page_count_log_done then
+                _page_count_log_done = true
+                local logger = require("logger")
+                logger.dbg("zen-ui:browser_page_count:paintTo: x=", x, "y=", y,
+                    "self.height=", self.height, "self.width=", self.width,
+                    "target.dimen.h=", target.dimen.h, "target.dimen.w=", target.dimen.w,
+                    "target.dimen.y=", target.dimen.y,
+                    "cover_left=", cover_left, "cover_bottom=", cover_bottom,
+                    "strip_patched=", tostring(MosaicMenuItem._zen_title_strip_patched))
+            end
 
             -- 6. Measure text — font, height, padding all scale with eff_size
             --    matching the cover badge proportions exactly.
@@ -151,13 +177,13 @@ local function apply_browser_page_count()
             }
             local tw_sz  = tw:getSize()
             -- Height fixed by eff_size (same scale as cover badge bh).
-            local bh     = math.floor(eff_size * 0.95)
+            local bh     = math.floor(eff_size * 0.85)
             -- Horizontal padding proportional to eff_size (≈ bw * 0.12).
             local h_pad  = math.floor(eff_size * 0.12)
             local bw     = tw_sz.w + 2 * h_pad
-            local margin = math.floor(eff_size * 0.3)
-            local bx     = cover_left + margin
-            local by     = cover_bottom - bh - margin
+            local inset  = utils.getBadgeInset(math.floor(bh / 2))
+            local bx     = cover_left + inset
+            local by     = cover_bottom - bh - inset
 
             -- 7. Paint pill: 2-px border offset (matches cover badge pattern).
             paintPill(bb, bx - 2, by - 2, bw + 4, bh + 4, Blitbuffer.COLOR_BLACK)

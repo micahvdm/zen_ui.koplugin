@@ -5,6 +5,7 @@
 local logger = require("logger")
 local SQ3 = require("lua-ljsqlite3/init")
 local lfs = require("libs/libkoreader-lfs")
+local paths = require("common/paths")
 
 local M = {}
 
@@ -14,16 +15,6 @@ local function getDbPath()
     if not ok then return nil end
     local path = DataStorage:getSettingsDir() .. "/bookinfo_cache.sqlite3"
     if lfs.attributes(path, "mode") == "file" then return path end
-    return nil
-end
-
--- Returns the user's home dir (library root), stripped of trailing slash.
-local function getHomeDir()
-    local g = rawget(_G, "G_reader_settings")
-    local d = g and g:readSetting("home_dir")
-    if d and d ~= "" then
-        return d:gsub("/*$", "")
-    end
     return nil
 end
 
@@ -47,7 +38,7 @@ function M.getGroupedByAuthor()
         return {}
     end
 
-    local home_dir = getHomeDir()
+    local home_dir = paths.getHomeDir()
     local ok, conn = pcall(SQ3.open, db_path)
     if not ok then
         logger.warn("zen-ui db_bookinfo: failed to open DB:", conn)
@@ -81,24 +72,26 @@ function M.getGroupedByAuthor()
 
             if not dir or not fname or not authors_str then goto continue end
 
-            local filepath = dir .. fname
+            local raw_filepath  = dir .. fname
+            local norm_filepath = paths.normPath(raw_filepath)
 
-            -- Skip if outside home_dir
-            if home_dir and filepath:sub(1, #home_dir) ~= home_dir then
+            -- Skip if outside home_dir (compare normalized to handle /sdcard symlink)
+            if home_dir and not paths.isInHomeDir(norm_filepath) then
                 goto continue
             end
 
-            -- Skip if file no longer exists
-            if lfs.attributes(filepath, "mode") ~= "file" then
+            -- Skip if file no longer exists on disk (use normalized path for safety on Android).
+            if lfs.attributes(norm_filepath, "mode") ~= "file" then
                 goto continue
             end
 
+            -- Keep raw path so BookInfoManager can find the SQLite entry by its key.
             local author_list = splitAuthors(authors_str)
             for _, author in ipairs(author_list) do
                 if not author_map[author] then
                     author_map[author] = {}
                 end
-                table.insert(author_map[author], filepath)
+                table.insert(author_map[author], raw_filepath)
             end
 
             ::continue::
@@ -118,7 +111,7 @@ function M.getGroupedByAuthor()
         table.insert(groups, { author = author, files = files })
     end
     table.sort(groups, function(a, b)
-        return a.author:lower() < b.author:lower()
+        return a.author < b.author
     end)
 
     logger.dbg("zen-ui db_bookinfo: getGroupedByAuthor result:", #groups, "authors")
@@ -136,7 +129,7 @@ function M.getGroupedBySeries()
         return {}
     end
 
-    local home_dir = getHomeDir()
+    local home_dir = paths.getHomeDir()
     local ok, conn = pcall(SQ3.open, db_path)
     if not ok then
         logger.warn("zen-ui db_bookinfo: failed to open DB:", conn)
@@ -172,21 +165,23 @@ function M.getGroupedBySeries()
 
             if not dir or not fname or not series then goto continue end
 
-            local filepath = dir .. fname
+            local raw_filepath  = dir .. fname
+            local norm_filepath = paths.normPath(raw_filepath)
 
-            if home_dir and filepath:sub(1, #home_dir) ~= home_dir then
+            if home_dir and not paths.isInHomeDir(norm_filepath) then
                 goto continue
             end
 
-            if lfs.attributes(filepath, "mode") ~= "file" then
+            if lfs.attributes(norm_filepath, "mode") ~= "file" then
                 goto continue
             end
 
             if not series_map[series] then
                 series_map[series] = {}
             end
+            -- Keep raw path so BookInfoManager can find the SQLite entry by its key.
             table.insert(series_map[series], {
-                file         = filepath,
+                file         = raw_filepath,
                 series_index = sidx,
                 filename     = fname,
             })
@@ -214,7 +209,7 @@ function M.getGroupedBySeries()
         table.insert(groups, { series = series, items = items })
     end
     table.sort(groups, function(a, b)
-        return a.series:lower() < b.series:lower()
+        return a.series < b.series
     end)
 
     logger.dbg("zen-ui db_bookinfo: getGroupedBySeries result:", #groups, "series")
@@ -230,7 +225,7 @@ function M.getTBRBooks()
         return {}
     end
 
-    local home_dir = getHomeDir()
+    local home_dir = paths.getHomeDir()
     local ok, conn = pcall(SQ3.open, db_path)
     if not ok then
         logger.warn("zen-ui db_bookinfo: getTBRBooks: failed to open DB:", conn)
@@ -257,14 +252,16 @@ function M.getTBRBooks()
             local dir   = dirs[i]
             local fname = filenames[i]
             if not dir or not fname then goto continue end
-            local filepath = dir .. fname
-            if home_dir and filepath:sub(1, #home_dir) ~= home_dir then
+            local raw_filepath  = dir .. fname
+            local norm_filepath = paths.normPath(raw_filepath)
+            if home_dir and not paths.isInHomeDir(norm_filepath) then
                 goto continue
             end
-            if lfs.attributes(filepath, "mode") ~= "file" then
+            if lfs.attributes(norm_filepath, "mode") ~= "file" then
                 goto continue
             end
-            table.insert(candidates, filepath)
+            -- Keep raw path so DocSettings sidecar lookup matches the stored key.
+            table.insert(candidates, raw_filepath)
             ::continue::
         end
     end)
@@ -302,7 +299,7 @@ function M.getTotalBookCount()
     local db_path = getDbPath()
     if not db_path then return 0 end
 
-    local home_dir = getHomeDir()
+    local home_dir = paths.getHomeDir()
     local ok, conn = pcall(SQ3.open, db_path)
     if not ok then return 0 end
     conn:set_busy_timeout(3000)
@@ -312,10 +309,26 @@ function M.getTotalBookCount()
         local sql, row
         if home_dir then
             -- directory values include a trailing slash, e.g. "/storage/books/"
-            -- LIKE prefix match covers all subdirectories too
-            sql = string.format(
-                "SELECT COUNT(*) FROM bookinfo WHERE in_progress = 0 AND directory LIKE %q;",
-                home_dir .. "%")
+            -- LIKE prefix match covers all subdirectories.
+            -- Also match the /sdcard <-> /storage/emulated/0 symlink variant so the
+            -- count is correct regardless of which prefix the SQLite DB used.
+            local alt
+            if home_dir:match("^/storage/emulated/0") then
+                alt = home_dir:gsub("^/storage/emulated/0", "/sdcard")
+            elseif home_dir:match("^/sdcard") then
+                alt = home_dir:gsub("^/sdcard", "/storage/emulated/0")
+            end
+            if alt and alt ~= home_dir then
+                sql = string.format(
+                    "SELECT COUNT(*) FROM bookinfo WHERE in_progress = 0"
+                    .. " AND (directory LIKE %q OR directory LIKE %q);",
+                    home_dir .. "%", alt .. "%")
+            else
+                sql = string.format(
+                    "SELECT COUNT(*) FROM bookinfo WHERE in_progress = 0"
+                    .. " AND directory LIKE %q;",
+                    home_dir .. "%")
+            end
         else
             sql = "SELECT COUNT(*) FROM bookinfo WHERE in_progress = 0;"
         end

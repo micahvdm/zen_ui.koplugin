@@ -10,6 +10,7 @@ local function apply_browser_folder_sort()
     ]]
 
     local FileChooser = require("ui/widget/filechooser")
+    local paths       = require("common/paths")
 
     local SETTINGS_KEY = "zen_ui_folder_sort"
 
@@ -80,7 +81,7 @@ local function apply_browser_folder_sort()
 
         -- Never apply a per-folder sort override to the home directory.
         local g = rawget(_G, "G_reader_settings")
-        local home_dir = g and g:readSetting("home_dir")
+        local home_dir = paths.getHomeDir()
         if home_dir then
             local home_real = ffiUtil and ffiUtil.realpath and ffiUtil.realpath(home_dir) or home_dir
             if real_path == home_real or path == home_dir then

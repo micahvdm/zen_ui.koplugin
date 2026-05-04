@@ -224,6 +224,27 @@ function M.formatPageCount(pages, long)
     return tostring(pages) .. "\u{00A0}" .. _C(ctx, msgid)
 end
 
+--- Scale multiplier for mosaic cover badge sizes (compact=1.0, normal=1.10, large=1.20).
+--- Returns the corner inset for badge positioning (same value for all 4 corners).
+--- Changing the factor here moves all badges in/out uniformly.
+--- @param r number  the badge radius (or half-height for pill badges)
+--- @return number
+function M.getBadgeInset(r)
+    return math.floor(r * 0.40)
+end
+
+--- @param config table|nil  the plugin config table (p.config)
+--- @return number
+function M.getBadgeScale(config)
+    local sz = type(config) == "table"
+        and type(config.browser_cover_badges) == "table"
+        and config.browser_cover_badges.badge_size
+    if sz == "extra_large" then return 1.50 end
+    if sz == "large"       then return 1.20 end
+    if sz == "normal"      then return 1.10 end
+    return 1.0
+end
+
 -- Close all UIManager window-stack entries above `anchor_widget`.
 -- Collects first to avoid mutating the stack during iteration.
 function M.closeWidgetsAbove(anchor_widget)

@@ -11,6 +11,7 @@
 -- and counts entries whose summary.status == "complete".
 
 local logger = require("logger")
+local paths = require("common/paths")
 
 local LibraryDB = {}
 
@@ -53,20 +54,13 @@ function LibraryDB.getBookCounts()
             ReadHistory:reload(false)
         end
 
-        local g_settings = rawget(_G, "G_reader_settings")
-        local home_dir = g_settings and g_settings:readSetting("home_dir")
-        -- Normalise: strip trailing slash so prefix matching is consistent
-        if home_dir and home_dir ~= "" then
-            home_dir = home_dir:gsub("/*$", "")
-        else
-            home_dir = nil
-        end
+        local home_dir = paths.getHomeDir()
 
         local hist = ReadHistory.hist or {}
         for _, entry in ipairs(hist) do
             local file = entry.file
             -- Skip books outside home_dir (SD card, other folders, etc.)
-            if file and home_dir and file:sub(1, #home_dir) ~= home_dir then
+            if file and home_dir and not paths.isInHomeDir(file) then
                 file = nil
             end
             if file and DocSettings:hasSidecarFile(file) then

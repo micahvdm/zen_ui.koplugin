@@ -9,11 +9,10 @@
 local function apply_browser_display_mode_by_path()
     local FileManager = require("apps/filemanager/filemanager")
     local FileChooser  = require("ui/widget/filechooser")
+    local paths        = require("common/paths")
 
     local function is_in_home(path)
-        local home_dir = G_reader_settings and G_reader_settings:readSetting("home_dir")
-        if not home_dir or not path then return false end
-        return path == home_dir or path:sub(1, #home_dir + 1) == home_dir .. "/"
+        return paths.isInHomeDir(path)
     end
 
     local orig_changeToPath = FileChooser.changeToPath

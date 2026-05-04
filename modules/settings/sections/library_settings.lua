@@ -4,6 +4,7 @@
 
 local _ = require("gettext")
 local UIManager = require("ui/uimanager")
+local paths = require("common/paths")
 
 local status_bar_section = require("modules/settings/sections/library_settings/status_bar_settings")
 local settings_apply     = require("modules/settings/zen_settings_apply")
@@ -129,17 +130,147 @@ function M.build(ctx)
                         end,
                     },
                 },
-            },
+            }
         },
     })
-
-    -- -------------------------------------------------------------------------
-    -- Covers
-    -- -------------------------------------------------------------------------
 
     table.insert(items, {
         text = _("Covers"),
         sub_item_table = {
+            {
+                text = _("Badges"),
+                sub_item_table = {
+                    {
+                        text = _("Badge size"),
+                        sub_item_table = (function()
+                            local sizes = {
+                                { label = _("Compact"),     value = "compact"     },
+                                { label = _("Normal"),      value = "normal"      },
+                                { label = _("Large"),       value = "large"       },
+                                { label = _("Extra large"), value = "extra_large" },
+                            }
+                            local badge_size_items = {}
+                            for _i, sz in ipairs(sizes) do
+                                local v = sz.value
+                                table.insert(badge_size_items, {
+                                    text = sz.label,
+                                    radio = true,
+                                    checked_func = function()
+                                        local cur = type(config.browser_cover_badges) == "table"
+                                            and config.browser_cover_badges.badge_size
+                                        return (cur or "compact") == v
+                                    end,
+                                    callback = function()
+                                        if type(config.browser_cover_badges) ~= "table" then
+                                            config.browser_cover_badges = {}
+                                        end
+                                        config.browser_cover_badges.badge_size = v
+                                        plugin:saveConfig()
+                                        UIManager:setDirty(nil, "full")
+                                    end,
+                                })
+                            end
+                            return badge_size_items
+                        end)(),
+                    },
+                    {
+                        text = _("Show page count"),
+                        checked_func = function()
+                            return type(config.browser_page_count) == "table"
+                                and config.browser_page_count.show_page_count == true
+                        end,
+                        callback = function()
+                            if type(config.browser_page_count) ~= "table" then
+                                config.browser_page_count = {}
+                            end
+                            config.browser_page_count.show_page_count =
+                                not (config.browser_page_count.show_page_count == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                    {
+                        text = _("Show series number on covers"),
+                        checked_func = function()
+                            return type(config.browser_series_badge) == "table"
+                                and config.browser_series_badge.show_series_badge == true
+                        end,
+                        callback = function()
+                            if type(config.browser_series_badge) ~= "table" then
+                                config.browser_series_badge = {}
+                            end
+                            config.browser_series_badge.show_series_badge =
+                                not (config.browser_series_badge.show_series_badge == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                    {
+                        text = _("Show favorite badge"),
+                        checked_func = function()
+                            return type(config.browser_cover_badges) == "table"
+                                and config.browser_cover_badges.show_favorite_badge == true
+                        end,
+                        callback = function()
+                            if type(config.browser_cover_badges) ~= "table" then
+                                config.browser_cover_badges = {}
+                            end
+                            config.browser_cover_badges.show_favorite_badge =
+                                not (config.browser_cover_badges.show_favorite_badge == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                    {
+                        text = _("Show new banner"),
+                        checked_func = function()
+                            return type(config.browser_cover_badges) == "table"
+                                and config.browser_cover_badges.show_new_banner == true
+                        end,
+                        callback = function()
+                            if type(config.browser_cover_badges) ~= "table" then
+                                config.browser_cover_badges = {}
+                            end
+                            config.browser_cover_badges.show_new_banner =
+                                not (config.browser_cover_badges.show_new_banner == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                    {
+                        text = _("Show KOReader progress bar"),
+                        checked_func = function()
+                            return type(config.browser_cover_badges) == "table"
+                                and config.browser_cover_badges.show_native_progress_bar == true
+                        end,
+                        callback = function()
+                            if type(config.browser_cover_badges) ~= "table" then
+                                config.browser_cover_badges = {}
+                            end
+                            config.browser_cover_badges.show_native_progress_bar =
+                                not (config.browser_cover_badges.show_native_progress_bar == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                    {
+                        text = _("Show progress % on mosaic covers"),
+                        checked_func = function()
+                            return type(config.browser_cover_badges) == "table"
+                                and config.browser_cover_badges.show_mosaic_progress == true
+                        end,
+                        callback = function()
+                            if type(config.browser_cover_badges) ~= "table" then
+                                config.browser_cover_badges = {}
+                            end
+                            config.browser_cover_badges.show_mosaic_progress =
+                                not (config.browser_cover_badges.show_mosaic_progress == true)
+                            plugin:saveConfig()
+                            UIManager:setDirty(nil, "full")
+                        end,
+                    },
+                },
+            },
             {
                 text = _("Rounded cover corners"),
                 checked_func = function()
@@ -169,99 +300,35 @@ function M.build(ctx)
                 end,
             },
             {
-                text = _("Show progress % on mosaic covers"),
+                text = _("Show title below cover (mosaic)"),
                 checked_func = function()
-                    return type(config.browser_cover_badges) == "table"
-                        and config.browser_cover_badges.show_mosaic_progress == true
+                    return type(config.mosaic_title_strip) == "table"
+                        and config.mosaic_title_strip.show_title == true
                 end,
                 callback = function()
-                    if type(config.browser_cover_badges) ~= "table" then
-                        config.browser_cover_badges = {}
+                    if type(config.mosaic_title_strip) ~= "table" then
+                        config.mosaic_title_strip = {}
                     end
-                    config.browser_cover_badges.show_mosaic_progress =
-                        not (config.browser_cover_badges.show_mosaic_progress == true)
+                    config.mosaic_title_strip.show_title =
+                        not (config.mosaic_title_strip.show_title == true)
                     plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
+                    settings_apply.prompt_restart()
                 end,
             },
             {
-                text = _("Show KOReader progress bar"),
+                text = _("Show author below cover (mosaic)"),
                 checked_func = function()
-                    return type(config.browser_cover_badges) == "table"
-                        and config.browser_cover_badges.show_native_progress_bar == true
+                    return type(config.mosaic_title_strip) == "table"
+                        and config.mosaic_title_strip.show_author == true
                 end,
                 callback = function()
-                    if type(config.browser_cover_badges) ~= "table" then
-                        config.browser_cover_badges = {}
+                    if type(config.mosaic_title_strip) ~= "table" then
+                        config.mosaic_title_strip = {}
                     end
-                    config.browser_cover_badges.show_native_progress_bar =
-                        not (config.browser_cover_badges.show_native_progress_bar == true)
+                    config.mosaic_title_strip.show_author =
+                        not (config.mosaic_title_strip.show_author == true)
                     plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
-                end,
-            },
-            {
-                text = _("Show page count"),
-                checked_func = function()
-                    return type(config.browser_page_count) == "table"
-                        and config.browser_page_count.show_page_count == true
-                end,
-                callback = function()
-                    if type(config.browser_page_count) ~= "table" then
-                        config.browser_page_count = {}
-                    end
-                    config.browser_page_count.show_page_count =
-                        not (config.browser_page_count.show_page_count == true)
-                    plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
-                end,
-            },
-            {
-                text = _("Show series number on covers"),
-                checked_func = function()
-                    return type(config.browser_series_badge) == "table"
-                        and config.browser_series_badge.show_series_badge == true
-                end,
-                callback = function()
-                    if type(config.browser_series_badge) ~= "table" then
-                        config.browser_series_badge = {}
-                    end
-                    config.browser_series_badge.show_series_badge =
-                        not (config.browser_series_badge.show_series_badge == true)
-                    plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
-                end,
-            },
-            {
-                text = _("Show favorite badge"),
-                checked_func = function()
-                    return type(config.browser_cover_badges) == "table"
-                        and config.browser_cover_badges.show_favorite_badge == true
-                end,
-                callback = function()
-                    if type(config.browser_cover_badges) ~= "table" then
-                        config.browser_cover_badges = {}
-                    end
-                    config.browser_cover_badges.show_favorite_badge =
-                        not (config.browser_cover_badges.show_favorite_badge == true)
-                    plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
-                end,
-            },
-            {
-                text = _("Show new banner"),
-                checked_func = function()
-                    return type(config.browser_cover_badges) == "table"
-                        and config.browser_cover_badges.show_new_banner == true
-                end,
-                callback = function()
-                    if type(config.browser_cover_badges) ~= "table" then
-                        config.browser_cover_badges = {}
-                    end
-                    config.browser_cover_badges.show_new_banner =
-                        not (config.browser_cover_badges.show_new_banner == true)
-                    plugin:saveConfig()
-                    UIManager:setDirty(nil, "full")
+                    settings_apply.prompt_restart()
                 end,
             },
         },
@@ -590,8 +657,9 @@ function M.build(ctx)
     -- -------------------------------------------------------------------------
 
     local scroll_bar_styles = {
-        { text = _("Bar"),  style = "bar"  },
-        { text = _("Dots"), style = "dots" },
+        { text = _("Bar"),         style = "bar"         },
+        { text = _("Dots"),        style = "dots"        },
+        { text = _("Page number"), style = "page_number" },
     }
 
     local function get_scroll_bar_style()
@@ -609,9 +677,72 @@ function M.build(ctx)
                 config.zen_scroll_bar.style = entry.style
                 plugin:saveConfig()
                 UIManager:setDirty(nil, "ui")
+                -- Footer height differs between page_number and other styles;
+                -- reinit rebuilds the menu with the correct height and touch zones.
+                settings_apply.reinit_filemanager()
             end,
         })
     end
+
+    -- Page number format sub-menu (nested inside scroll bar style, greyed out unless page_number)
+    local pn_formats = {
+        { text = _("Current only"), fmt = "current" },
+        { text = _("Page x / y"),   fmt = "total"   },
+    }
+    local function get_pn_format()
+        return (type(config.zen_scroll_bar) == "table"
+            and config.zen_scroll_bar.page_number_format) or "current"
+    end
+    local pn_format_sub_items = {}
+    for _, entry in ipairs(pn_formats) do
+        table.insert(pn_format_sub_items, {
+            text = entry.text,
+            checked_func = function() return get_pn_format() == entry.fmt end,
+            radio = true,
+            callback = function()
+                if type(config.zen_scroll_bar) ~= "table" then config.zen_scroll_bar = {} end
+                config.zen_scroll_bar.page_number_format = entry.fmt
+                plugin:saveConfig()
+                UIManager:setDirty(nil, "ui")
+            end,
+        })
+    end
+    table.insert(scroll_bar_sub_items, {
+        text           = _("Page number format"),
+        enabled_func   = function() return get_scroll_bar_style() == "page_number" end,
+        sub_item_table = pn_format_sub_items,
+        separator      = true,  -- visual break after the radio style entries
+    })
+
+    -- Hold-to-skip sub-menu (nested inside scroll bar style, greyed out unless page_number)
+    local hold_skip_opts = {
+        { text = _("Skip 10 pages"),   skip = "10"   },
+        { text = _("Skip 20 pages"),   skip = "20"   },
+        { text = _("Beginning / End"), skip = "ends" },
+    }
+    local function get_hold_skip()
+        return (type(config.zen_scroll_bar) == "table"
+            and config.zen_scroll_bar.hold_skip) or "10"
+    end
+    local hold_skip_sub_items = {}
+    for _, entry in ipairs(hold_skip_opts) do
+        table.insert(hold_skip_sub_items, {
+            text = entry.text,
+            checked_func = function() return get_hold_skip() == entry.skip end,
+            radio = true,
+            callback = function()
+                if type(config.zen_scroll_bar) ~= "table" then config.zen_scroll_bar = {} end
+                config.zen_scroll_bar.hold_skip = entry.skip
+                plugin:saveConfig()
+                UIManager:setDirty(nil, "ui")
+            end,
+        })
+    end
+    table.insert(scroll_bar_sub_items, {
+        text           = _("Hold to skip"),
+        enabled_func   = function() return get_scroll_bar_style() == "page_number" end,
+        sub_item_table = hold_skip_sub_items,
+    })
 
     table.insert(items, {
         text = _("Scroll bar style"),
@@ -679,7 +810,7 @@ function M.build(ctx)
                 callback = function()
                     local filemanagerutil = require("apps/filemanager/filemanagerutil")
                     local title_header = _("Current home folder:")
-                    local current_path = G_reader_settings:readSetting("home_dir")
+                    local current_path = paths.getHomeDir()
                     local default_path = filemanagerutil.getDefaultDir()
                     filemanagerutil.showChooseDialog(title_header, function(path)
                         G_reader_settings:saveSetting("home_dir", path)
@@ -702,6 +833,64 @@ function M.build(ctx)
                 callback = function()
                     G_reader_settings:flipNilOrFalse("lock_home_folder")
                     refresh_filechooser()
+                end,
+            },
+            {
+                text = _("Additional home folders"),
+                sub_item_table_func = function()
+                    local dirs = type(config.additional_home_dirs) == "table"
+                        and config.additional_home_dirs or {}
+                    local sub = {}
+                    table.insert(sub, {
+                        text = _("Add folder…"),
+                        keep_menu_open = true,
+                        callback = function(touchmenu_instance)
+                            local PathChooser = require("ui/widget/pathchooser")
+                            local start_path = paths.getHomeDir()
+                                or G_reader_settings:readSetting("lastdir") or "/"
+                            UIManager:show(PathChooser:new{
+                                select_file = false,
+                                show_files  = false,
+                                path        = start_path,
+                                onConfirm   = function(dir_path)
+                                    if type(config.additional_home_dirs) ~= "table" then
+                                        config.additional_home_dirs = {}
+                                    end
+                                    for _, existing in ipairs(config.additional_home_dirs) do
+                                        if existing == dir_path then return end
+                                    end
+                                    table.insert(config.additional_home_dirs, dir_path)
+                                    plugin:saveConfig()
+                                    if touchmenu_instance then
+                                        touchmenu_instance:updateItems()
+                                    end
+                                end,
+                            })
+                        end,
+                    })
+                    for i, dir in ipairs(dirs) do
+                        local util = require("util")
+                        local _d, name = util.splitFilePathName(dir)
+                        table.insert(sub, {
+                            text = name ~= "" and name or dir,
+                            keep_menu_open = true,
+                            callback = function(touchmenu_instance)
+                                local ConfirmBox = require("ui/widget/confirmbox")
+                                UIManager:show(ConfirmBox:new{
+                                    text = _("Remove this folder from additional home folders?") .. "\n" .. dir,
+                                    ok_text = _("Remove"),
+                                    ok_callback = function()
+                                        table.remove(config.additional_home_dirs, i)
+                                        plugin:saveConfig()
+                                        if touchmenu_instance then
+                                            touchmenu_instance:updateItems()
+                                        end
+                                    end,
+                                })
+                            end,
+                        })
+                    end
+                    return sub
                 end,
             },
         },

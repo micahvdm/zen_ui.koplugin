@@ -2,6 +2,7 @@ local function apply_search()
     local FileManagerFileSearcher = require("apps/filemanager/filemanagerfilesearcher")
     local InputDialog = require("ui/widget/inputdialog")
     local UIManager = require("ui/uimanager")
+    local paths = require("common/paths")
     local _ = require("gettext")
 
     -- Capture plugin reference at apply time (global is only set transiently)
@@ -33,7 +34,7 @@ local function apply_search()
             self.case_sensitive = false
             self.include_subfolders = true
             self.include_metadata = self.ui.coverbrowser and true or false
-            FileManagerFileSearcher.search_path = G_reader_settings:readSetting("home_dir")
+            FileManagerFileSearcher.search_path = paths.getHomeDir()
             local Trapper = require("ui/trapper")
             Trapper:wrap(function()
                 self:doSearch()
@@ -239,6 +240,29 @@ local function apply_search()
         end
 
         return result
+    end
+
+    -- Patch InputDialog.onTap at the class level: when the keyboard is visible
+    -- and the tap lands outside BOTH the keyboard and the dialog frame, close
+    -- both (keyboard + dialog). Stock behavior only closes the keyboard.
+    -- Instance-level overrides (e.g. on the Zen file search dialog) take
+    -- precedence, so this only affects dialogs that don't override onTap.
+    local orig_InputDialog_onTap = InputDialog.onTap
+    InputDialog.onTap = function(self, arg, ges)
+        if self.deny_keyboard_hiding then return end
+        if self:isKeyboardVisible() then
+            local kb = self._input_widget and self._input_widget.keyboard
+            if kb and kb.dimen
+               and ges.pos:notIntersectWith(kb.dimen)
+               and ges.pos:notIntersectWith(self.dialog_frame.dimen) then
+                self:onCloseKeyboard()
+                UIManager:close(self)
+                return true
+            end
+            return orig_InputDialog_onTap(self, arg, ges)
+        else
+            return orig_InputDialog_onTap(self, arg, ges)
+        end
     end
 end
 

@@ -6,6 +6,7 @@
 local _ = require("gettext")
 local UIManager = require("ui/uimanager")
 local utils = require("modules/settings/zen_settings_utils")
+local paths = require("common/paths")
 
 local M = {}
 
@@ -64,8 +65,9 @@ function M.build(ctx)
         { id = "authors",     text = _("Authors")       },
         { id = "series",      text = _("Series")        },
         { id = "to_be_read",  text = _("To Be Read")    },
-        { id = "search",      text = _("Search")        },
-        { id = "stats",       text = _("Stats")         },
+        { id = "search",         text = _("Search")          },
+        { id = "calibre_search", text = _("Calibre Search")  },
+        { id = "stats",          text = _("Stats")            },
         { id = "exit",        text = _("Exit")          },
         { id = "page_left",   text = _("Previous page") },
         { id = "page_right",  text = _("Next page")     },
@@ -252,7 +254,7 @@ function M.build(ctx)
                                         text = _("Use home folder"),
                                         callback = function()
                                             config.navbar.manga_action = "folder"
-                                            config.navbar.manga_folder = utils.get_home_dir()
+                                            config.navbar.manga_folder = paths.getHomeDir()
                                             save_and_apply_navbar()
                                         end,
                                     },
@@ -344,7 +346,7 @@ function M.build(ctx)
                                         text = _("Use home folder"),
                                         callback = function()
                                             config.navbar.news_action = "folder"
-                                            config.navbar.news_folder = utils.get_home_dir()
+                                            config.navbar.news_folder = paths.getHomeDir()
                                             save_and_apply_navbar()
                                         end,
                                     },

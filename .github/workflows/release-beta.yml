@@ -33,14 +33,37 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BASE="v${{ steps.meta.outputs.version }}"
+          META_VERSION="${{ steps.meta.outputs.version }}"
+          BASE="v${META_VERSION}"
+
+          # Get the latest release tag (including pre-releases)
+          LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName \
+            --jq '.[0].tagName' 2>/dev/null | sed 's/^v//' | sed 's/-beta[0-9]*$//')
+
+          if [[ -n "$LATEST" ]]; then
+            LOWER=$(printf '%s\n%s' "$META_VERSION" "$LATEST" | sort -V | head -1)
+            if [[ "$LOWER" == "$META_VERSION" && "$META_VERSION" != "$LATEST" ]]; then
+              echo "Version $META_VERSION is lower than current release $LATEST. Skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
           N=1
           while gh release view "${BASE}-beta${N}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; do
             N=$((N + 1))
           done
           BETA_TAG="${BASE}-beta${N}"
+          BETA_VERSION="${META_VERSION}-beta${N}"
           echo "tag=$BETA_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$BETA_VERSION" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp beta version in _meta.lua
+        if: steps.version_check.outputs.skip == 'false'
+        run: |
+          BETA_VERSION="${{ steps.version_check.outputs.version }}"
+          sed -i "s/version = \"[^\"]*\"/version = \"${BETA_VERSION}\"/" _meta.lua
 
       - name: Build plugin zip
         if: steps.version_check.outputs.skip == 'false'

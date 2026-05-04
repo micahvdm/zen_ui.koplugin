@@ -11,6 +11,7 @@ local ConfigManager = require("config/manager")
 local registry = require("modules/registry")
 local zen_settings = require("modules/settings/zen_settings")
 local zen_updater   = require("modules/settings/zen_updater")
+local paths         = require("common/paths")
 
 -- Absolute path to this plugin's root directory (shared module resolves relative paths).
 local _plugin_root = require("common/plugin_root")
@@ -262,8 +263,11 @@ function ZenUI:init()
         elseif is_update then
             local ok_pages, pages_mod = pcall(require, "common/quickstart_pages")
             if ok_pages then
+                -- Strip beta suffix (e.g. "1.0.4-beta2" -> "1.0.4") for changelog lookup.
+                local stable_ver = current_ver:match("^([%d%.]+)")
                 pages_to_show     = pages_mod.UPDATE_PAGES[current_ver]
-                changelog_to_show = pages_mod.CHANGELOGS and pages_mod.CHANGELOGS[current_ver]
+                changelog_to_show = pages_mod.CHANGELOGS and (
+                    pages_mod.CHANGELOGS[current_ver] or pages_mod.CHANGELOGS[stable_ver])
             end
         end
 
@@ -311,7 +315,7 @@ function ZenUI:init()
                             local ok_fm3, FM3 = pcall(require, "apps/filemanager/filemanager")
                             local fm3 = ok_fm3 and FM3 and FM3.instance
                             if fm3 and fm3.file_chooser then
-                                local new_home = G_reader_settings:readSetting("home_dir")
+                                local new_home = paths.getHomeDir()
                                 if new_home and new_home ~= "" and new_home ~= fm3.file_chooser.path then
                                     fm3.file_chooser:changeToPath(new_home)
                                 end
@@ -382,6 +386,13 @@ function ZenUI:init()
         menu_class.setUpdateItemTable = function(m_self)
             orig_sut(m_self)
             if type(m_self.tab_item_table) ~= "table" or not _zen_plugin_ref then return end
+            -- Remove KOReader's default filebrowser tab; our library tab replaces it.
+            for i = #m_self.tab_item_table, 1, -1 do
+                if m_self.tab_item_table[i].id == "filemanager" then
+                    table.remove(m_self.tab_item_table, i)
+                    break
+                end
+            end
             -- Insert Zen UI tab right after quicksettings.
             local zen_items = zen_settings.build(_zen_plugin_ref).sub_item_table
             -- Hide the zen tab if lockdown hides the settings panel.

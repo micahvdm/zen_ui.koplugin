@@ -203,4 +203,10 @@ end
 
 M.prompt_restart = prompt_restart
 
+-- Trigger a file manager reinit (deferred while the touch menu is open).
+-- Use this when a setting changes the footer height (e.g. scroll bar style).
+function M.reinit_filemanager()
+    run_apply_mode("filemanager_reinit")
+end
+
 return M

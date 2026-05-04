@@ -17,6 +17,7 @@ local Blitbuffer     = require("ffi/blitbuffer")
 local Device         = require("device")
 local Font           = require("ui/font")
 local Geom           = require("ui/geometry")
+local Input          = require("device/input")
 local TextBoxWidget  = require("ui/widget/textboxwidget")
 local TextWidget     = require("ui/widget/textwidget")
 local UIManager      = require("ui/uimanager")
@@ -77,9 +78,10 @@ function QuickstartScreen:init()
     }
 
     -- Initialize selections from page choice defaults
-    self._selections  = {}
-    self._choice_area = nil
-    self._finale_btn  = nil
+    self._selections     = {}
+    self._choice_area    = nil
+    self._finale_btn     = nil
+    self._focused_choice = nil   -- index of keyboard-focused choice row, or nil
     for i, page in ipairs(self.pages) do
         if page.choices then
             local sel = {}
@@ -106,6 +108,40 @@ function QuickstartScreen:init()
             handler     = function(ges) return self:_onTap(ges) end,
         },
     })
+
+    -- Physical key bindings (only registered when device has keys)
+    if Device:hasKeys() then
+        self.key_events = {
+            QsNextPage = {
+                { Input.group.PgFwd },
+                event = "QsNextPage",
+            },
+            QsPrevPage = {
+                { Input.group.PgBack },
+                event = "QsPrevPage",
+            },
+            QsFocusRight = {
+                { "Right" },
+                event = "QsFocusRight",
+            },
+            QsFocusLeft = {
+                { "Left" },
+                event = "QsFocusLeft",
+            },
+            QsFocusUp = {
+                { "Up" },
+                event = "QsFocusUp",
+            },
+            QsFocusDown = {
+                { "Down" },
+                event = "QsFocusDown",
+            },
+            QsConfirm = {
+                { "Press" },
+                event = "QsConfirm",
+            },
+        }
+    end
 end
 
 -- Draw a radio button indicator (ring + optional filled centre).
@@ -199,6 +235,16 @@ function QuickstartScreen:_paintChoicesDescBand(bb, x, y, page, desc_paint_y, ds
     self:_paintChoiceRows(bb, x, choices_top, row_h, page, sel)
 end
 
+-- Draw a thin focus ring around the focused row (keyboard navigation only).
+function QuickstartScreen:_paintFocusRing(bb, x, row_y, row_w, row_h)
+    local col = Blitbuffer.COLOR_BLACK
+    local t   = 2  -- border thickness
+    bb:paintRect(x,               row_y,               row_w, t,     col)
+    bb:paintRect(x,               row_y + row_h - t,   row_w, t,     col)
+    bb:paintRect(x,               row_y,               t,     row_h, col)
+    bb:paintRect(x + row_w - t,   row_y,               t,     row_h, col)
+end
+
 function QuickstartScreen:_paintChoiceRows(bb, x, choices_top, row_h, page, sel)
     local L           = self._L
     local ind_sz      = Screen:scaleBySize(16)
@@ -206,8 +252,15 @@ function QuickstartScreen:_paintChoiceRows(bb, x, choices_top, row_h, page, sel)
     local text_x      = ind_x + ind_sz + Screen:scaleBySize(10)
     local img_avail_w = L.sw - L.pad * 4
 
+    local focused = self._focused_choice
+
     for i, choice in ipairs(page.choices) do
         local row_y = choices_top + (i - 1) * row_h
+
+        -- Focus ring for keyboard navigation
+        if focused == i then
+            self:_paintFocusRing(bb, x + self._L.pad, row_y + 2, self._L.sw - self._L.pad * 2, row_h - 4)
+        end
 
         -- Reserve image space at the bottom of the row; text+indicator go above
         local img_reserve_h = 0
@@ -478,12 +531,95 @@ end
 
 function QuickstartScreen:setPage(n)
     if n < 1 or n > self._total then return end
-    self._page_idx    = n
-    self._choice_area = nil
-    self._finale_btn  = nil
+    self._page_idx       = n
+    self._choice_area    = nil
+    self._finale_btn     = nil
+    self._focused_choice = nil  -- reset focus when page changes
     UIManager:setDirty(self, function()
         return "ui", self.dimen
     end)
+end
+
+-- ---------------------------------------------------------------------------
+-- Physical key handlers
+-- ---------------------------------------------------------------------------
+
+function QuickstartScreen:onQsNextPage()
+    self:_nextPage()
+    return true
+end
+
+function QuickstartScreen:onQsPrevPage()
+    self:_prevPage()
+    return true
+end
+
+-- Right arrow: advance page (same as PgFwd for non-choice pages)
+function QuickstartScreen:onQsFocusRight()
+    local page = self.pages[self._page_idx] or {}
+    if not page.choices then
+        self:_nextPage()
+    end
+    return true
+end
+
+-- Left arrow: go back a page (same as PgBack for non-choice pages)
+function QuickstartScreen:onQsFocusLeft()
+    local page = self.pages[self._page_idx] or {}
+    if not page.choices then
+        self:_prevPage()
+    end
+    return true
+end
+
+-- Up arrow: move keyboard focus up in choice list
+function QuickstartScreen:onQsFocusUp()
+    local page = self.pages[self._page_idx] or {}
+    if page.choices and #page.choices > 0 then
+        local cur = self._focused_choice or 1
+        self._focused_choice = math.max(1, cur - 1)
+        UIManager:setDirty(self, function() return "ui", self.dimen end)
+    end
+    return true
+end
+
+-- Down arrow: move keyboard focus down in choice list
+function QuickstartScreen:onQsFocusDown()
+    local page = self.pages[self._page_idx] or {}
+    if page.choices and #page.choices > 0 then
+        local cur = self._focused_choice or 0
+        self._focused_choice = math.min(#page.choices, cur + 1)
+        UIManager:setDirty(self, function() return "ui", self.dimen end)
+    end
+    return true
+end
+
+-- Enter/Press: confirm focused choice, or advance page / activate finale button
+function QuickstartScreen:onQsConfirm()
+    local page = self.pages[self._page_idx] or {}
+    local fc   = self._focused_choice
+    if page.choices and #page.choices > 0 and fc then
+        local choice = page.choices[fc]
+        if choice then
+            local sel = self._selections[self._page_idx] or {}
+            if page.choice_type == "radio" then
+                sel = { [choice.id] = true }
+            else
+                if not (sel[choice.id] == true) and page.max_selections then
+                    local count = 0
+                    for _k, v in pairs(sel) do if v == true then count = count + 1 end end
+                    if count >= page.max_selections then return true end
+                end
+                sel[choice.id] = not (sel[choice.id] == true)
+            end
+            self._selections[self._page_idx] = sel
+            UIManager:setDirty(self, function() return "ui", self.dimen end)
+        end
+    else
+        -- No focused choice: advance to next page (or close on finale)
+        self:_nextPage()
+    end
+    return true
 end
 
 -- Call on_apply for the current page if it has choices (forward navigation only).

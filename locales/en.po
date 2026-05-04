@@ -163,6 +163,9 @@ msgstr "avg time/book"
 msgid "avg time/day"
 msgstr "avg time/day"
 
+msgid "Badge size"
+msgstr "Badge size"
+
 msgid "Bar"
 msgstr "Bar"
 
@@ -336,6 +339,9 @@ msgstr "Colored status icons"
 
 msgid "Columns"
 msgstr "Columns"
+
+msgid "Compact"
+msgstr "Compact"
 
 msgid "Connect folders"
 msgstr "Connect folders"
@@ -695,6 +701,9 @@ msgstr "Landscape mosaic mode"
 msgid "Landscape mosaic: "
 msgstr "Landscape mosaic: "
 
+msgid "Large"
+msgstr "Large"
+
 msgid "last read date"
 msgstr "last read date"
 
@@ -880,6 +889,9 @@ msgstr "No network connection. Please connect to Wi-Fi and try again."
 
 msgid "No reader engine for this file or invalid file."
 msgstr "No reader engine for this file or invalid file."
+
+msgid "Normal"
+msgstr "Normal"
 
 msgid "No separator"
 msgstr "No separator"
@@ -1234,6 +1246,12 @@ msgstr "Show labels"
 
 msgid "Show new banner"
 msgstr "Show new banner"
+
+msgid "Show author below cover (mosaic)"
+msgstr "Show author below cover (mosaic)"
+
+msgid "Show title below cover (mosaic)"
+msgstr "Show title below cover (mosaic)"
 
 msgid "Show other items"
 msgstr "Show other items"

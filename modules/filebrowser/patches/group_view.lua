@@ -106,10 +106,12 @@ local function setup_display_mode(menu, is_group_view, tab_id)
                 local ok2, doc = pcall(DocSettings.open, DocSettings, file_path)
                 if not ok2 or not doc then return {} end
                 local summary = doc:readSetting("summary")
+                local stats   = doc:readSetting("stats")
                 return {
                     been_opened      = true,
                     percent_finished = doc:readSetting("percent_finished"),
                     status           = summary and summary.status,
+                    pages            = stats and stats.pages,
                 }
             end
         end
@@ -326,12 +328,17 @@ local function patch_list_item()
     local Screen = Device.screen
     local scale_by_size = Screen:scaleBySize(1000000) * (1 / 1000000)
 
-    local orig_list_update = ListMenuItem.update
+    -- Save pre-patch update so BLL (if it runs later and wraps our function)
+    -- is still called for non-group items regardless of init order.
+    ListMenuItem._zen_gv_orig = ListMenuItem.update
 
     function ListMenuItem:update(...)
         if not (self.menu and self.menu._zen_group_view
                 and self.entry and self.entry._zen_files) then
-            return orig_list_update(self, ...)
+            -- Use the live fallthrough so BLL's patch is honoured even if it
+            -- ran after our install (Android timing issue).
+            local fallthrough = ListMenuItem._zen_gv_orig
+            return fallthrough(self, ...)
         end
 
         self.is_directory = true
@@ -343,8 +350,9 @@ local function patch_list_item()
         local underline_h  = 1
         local dimen_h      = self.height - 2 * underline_h
         local border_size  = Size.border.thin
+        local cover_v_pad  = Screen:scaleBySize(4)  -- matches bll top+bottom padding
         local cover_zone_w = dimen_h
-        local max_img      = dimen_h - 2 * border_size
+        local max_img      = dimen_h - 2 * border_size - 2 * cover_v_pad
         local cover_w      = math.floor(max_img * 2 / 3)
 
         local function _fontSize(nominal, max_size)
@@ -870,8 +878,9 @@ local function sortDetailFiles(files, collate, reverse)
         elseif collate == "series" then
             sort_key = (bookinfo and bookinfo.series) or ""
         elseif collate == "access" then
-            -- Recently read: use last_read timestamp (higher = more recent)
-            sort_key = (bookinfo and bookinfo.last_read) or 0
+            -- Use file access time, which KOReader updates via lfs.touch() on each open.
+            local lfs = require("libs/libkoreader-lfs")
+            sort_key = lfs.attributes(fpath, "access") or 0
         else
             sort_key = fpath:match("([^/]+)$") or fpath
         end
@@ -886,15 +895,15 @@ local function sortDetailFiles(files, collate, reverse)
             local a_n = type(a.key) == "number" and a.key or 0
             local b_n = type(b.key) == "number" and b.key or 0
             if collate == "access" then
-                return reverse and (a_n < b_n) or (a_n > b_n)
+                if reverse then return a_n < b_n else return a_n > b_n end
             else
-                return reverse and (a_n > b_n) or (a_n < b_n)
+                if reverse then return a_n > b_n else return a_n < b_n end
             end
         else
             -- Alphabetical for title/series
             local a_lower = type(a.key) == "string" and a.key:lower() or tostring(a.key)
             local b_lower = type(b.key) == "string" and b.key:lower() or tostring(b.key)
-            return reverse and (a_lower > b_lower) or (a_lower < b_lower)
+            if reverse then return a_lower > b_lower else return a_lower < b_lower end
         end
     end)
 
@@ -1048,16 +1057,19 @@ local function showDetailView(group_item, injectNavbar, tab_id)
     local sorted_files = sortDetailFiles(files, cur_collate, cur_reverse)
 
     -- Build menu items from sorted files
+    local lfs_mod  = require("libs/libkoreader-lfs")
+    local util_mod = require("util")
     local book_items = {}
     for _, fpath in ipairs(sorted_files) do
         local fname = fpath:match("([^/]+)$") or fpath
         local display = fname:gsub("%.[^%.]+$", "")
-
+        local attr = lfs_mod.attributes(fpath)
         table.insert(book_items, {
-            text = display,
-            path = fpath,      -- Standard KOReader file item field
-            filepath = fpath,  -- Required for MosaicMenuItem badge access
-            is_file = true,    -- Required for CoverBrowser to recognize as file
+            text      = display,
+            path      = fpath,
+            filepath  = fpath,
+            is_file   = true,
+            mandatory = attr and util_mod.getFriendlySize(attr.size or 0) or "",
         })
     end
     if #book_items == 0 then
@@ -1457,15 +1469,19 @@ function M.showTBRView(injectNavbar)
     local sorted_files = sortDetailFiles(files, cur_collate, cur_reverse)
 
     local function buildItems(flist)
+        local lfs_mod  = require("libs/libkoreader-lfs")
+        local util_mod = require("util")
         local items = {}
         for _, fpath in ipairs(flist) do
             local fname   = fpath:match("([^/]+)$") or fpath
             local display = fname:gsub("%.[^%.]+$", "")
+            local attr = lfs_mod.attributes(fpath)
             table.insert(items, {
-                text     = display,
-                path     = fpath,
-                filepath = fpath,
-                is_file  = true,
+                text      = display,
+                path      = fpath,
+                filepath  = fpath,
+                is_file   = true,
+                mandatory = attr and util_mod.getFriendlySize(attr.size or 0) or "",
             })
         end
         if #items == 0 then

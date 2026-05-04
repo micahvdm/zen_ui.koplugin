@@ -13,6 +13,7 @@ local function apply_context_menu()
     local UIManager    = require("ui/uimanager")
     local _            = require("gettext")
     local C_           = _.pgettext
+    local paths        = require("common/paths")
     local zen_plugin   = rawget(_G, "__ZEN_UI_PLUGIN")
 
     -- ── MoveChooser ──────────────────────────────────────────────────────────
@@ -174,21 +175,10 @@ local function apply_context_menu()
                     return
                 end
             end
-            -- Delegate to stock KOReader dialog outside home directory.
-            local g_settings = rawget(_G, "G_reader_settings")
-            local home_dir   = g_settings and g_settings:readSetting("home_dir")
-            local cur_path   = self_fc.path or ""
-            if home_dir then
-                local norm_home = home_dir:gsub("/$", "")
-                local norm_cur  = cur_path:gsub("/$", "")
-                local is_at_or_under_home = norm_cur == norm_home
-                    or norm_cur:sub(1, #norm_home + 1) == norm_home .. "/"
-                if not is_at_or_under_home then
-                    return orig_showFileDialog(self_fc, item)
-                end
-            end
 
             -- ── Group context menu (authors/series views) ─────────────────────────────
+            -- Check this before the home-dir gate: these items always come from Zen UI
+            -- and don't have a filesystem path to compare against.
             if item._zen_group_files then
                 local group_files = item._zen_group_files
                 local group_name  = item._zen_group_name or ""
@@ -393,11 +383,23 @@ local function apply_context_menu()
                 return true
             end
 
+            -- Delegate to stock KOReader dialog outside home directory.
+            local home_dir   = paths.getHomeDir()
+            local cur_path   = self_fc.path or ""
+            if home_dir then
+                local norm_cur = paths.normPath(cur_path:gsub("/$", ""))
+                local is_at_or_under_home = norm_cur == home_dir
+                    or norm_cur:sub(1, #home_dir + 1) == home_dir .. "/"
+                if not is_at_or_under_home then
+                    return orig_showFileDialog(self_fc, item)
+                end
+            end
+
             local file               = item.path
             local is_file            = item.is_file
             local is_not_parent_folder = not item.is_go_up
             local is_home_dir = (not is_file) and home_dir
-                and (file:gsub("/$", "") == home_dir:gsub("/$", ""))
+                and (paths.normPath(file:gsub("/$", "")) == home_dir)
 
             local function close_dialog()
                 UIManager:close(self_fc.file_dialog)
@@ -1059,21 +1061,36 @@ local function apply_context_menu()
             -- ── Main dialog ───────────────────────────────────────────────────
             local buttons = {}
 
-            -- Description first row (files only, when available)
-            if is_file and is_not_parent_folder and book_description then
+            -- Details: description popup (with Book information button)
+            if is_file and is_not_parent_folder then
                 table.insert(buttons, {
                     {
-                        text     = "\u{F02FD}  " .. _("Description"),
+                        text     = "\u{F02FD}  " .. _("Details"),
                         align    = "left",
                         callback = function()
                             close_dialog()
                             local util       = require("util")
                             local TextViewer = require("ui/widget/textviewer")
-                            UIManager:show(TextViewer:new{
-                                title     = _("Description:"),
-                                text      = util.htmlToPlainTextIfHtml(book_description),
+                            local desc_text  = book_description
+                                and util.htmlToPlainTextIfHtml(book_description)
+                                or _("No description.")
+                            local tv
+                            tv = TextViewer:new{
+                                title     = _("Description"),
+                                text      = desc_text,
                                 text_type = "book_info",
-                            })
+                                -- replace default Find/Top/Bottom/Close with one button
+                                buttons_table = {
+                                    {{
+                                        text     = "\u{F02FD} " .. _("Book information"),
+                                        callback = function()
+                                            UIManager:close(tv)
+                                            file_manager.bookinfo:show(file)
+                                        end,
+                                    }},
+                                },
+                            }
+                            UIManager:show(tv)
                         end,
                     },
                 })
@@ -1123,7 +1140,7 @@ local function apply_context_menu()
                             local lfs            = require("libs/libkoreader-lfs")
                             local src            = ffiUtil.realpath(file)
                             if not src then return end
-                            local home_dir = (G_reader_settings and G_reader_settings:readSetting("home_dir"))
+                            local home_dir = paths.getHomeDir()
                                 or file_chooser.path
                             if not home_dir then return end
                             local src_dir = ffiUtil.realpath(ffiUtil.dirname(src))
@@ -1526,15 +1543,10 @@ local function apply_context_menu()
             }
             function file_chooser:onZenBlankHold(arg, ges)
                 -- Mirror showFileDialog's home-dir boundary guard.
-                local g_settings_bh = rawget(_G, "G_reader_settings")
-                local home_dir_bh   = g_settings_bh and g_settings_bh:readSetting("home_dir")
-                local cur_path_bh   = self.path or ""
+                local home_dir_bh = paths.getHomeDir()
+                local cur_path_bh = self.path or ""
                 if home_dir_bh then
-                    local norm_home = home_dir_bh:gsub("/$", "")
-                    local norm_cur  = cur_path_bh:gsub("/$", "")
-                    local at_or_under = norm_cur == norm_home
-                        or norm_cur:sub(1, #norm_home + 1) == norm_home .. "/"
-                    if not at_or_under then return false end
+                    if not paths.isInHomeDir(cur_path_bh) then return false end
                 end
                 -- Synthesize a folder item for the current directory so that
                 -- the patched showFileDialog (rename, new folder, sort, edit)

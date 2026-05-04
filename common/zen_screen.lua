@@ -17,6 +17,7 @@ local Blitbuffer     = require("ffi/blitbuffer")
 local Device         = require("device")
 local Font           = require("ui/font")
 local Geom           = require("ui/geometry")
+local Input          = require("device/input")
 local TextBoxWidget  = require("ui/widget/textboxwidget")
 local TextWidget     = require("ui/widget/textwidget")
 local UIManager      = require("ui/uimanager")
@@ -90,6 +91,46 @@ function ZenScreen:init()
             handler     = function(ges) return self:_onTap(ges) end,
         },
     })
+
+    -- Physical key bindings (only registered when device has keys)
+    if Device:hasKeys() then
+        self.key_events = {
+            ZsConfirm = {
+                { "Press" },
+                event = "ZsConfirm",
+            },
+            ZsConfirmPgFwd = {
+                { Input.group.PgFwd },
+                event = "ZsConfirm",
+            },
+            ZsDismiss = {
+                { Input.group.PgBack },
+                event = "ZsDismiss",
+            },
+        }
+    end
+end
+
+-- Enter/PgFwd: activate primary button (or dismiss if no button)
+function ZenScreen:onZsConfirm()
+    if self.button ~= false then
+        if self._on_button_action then
+            self._on_button_action()
+        else
+            self:onClose()
+        end
+    elseif self.dismissable then
+        self:onClose()
+    end
+    return true
+end
+
+-- PgBack: activate "Later" / dismiss
+function ZenScreen:onZsDismiss()
+    if self.dismissable then
+        self:onClose()
+    end
+    return true
 end
 
 function ZenScreen:paintTo(bb, x, y)

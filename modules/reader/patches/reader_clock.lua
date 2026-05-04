@@ -19,9 +19,9 @@ local function apply_reader_clock()
     local util = require("util")
     local datetime = require("datetime")
     local UIManager = require("ui/uimanager")
-    local Screen = Device.screen
     local _ = require("gettext")
     local T = require("ffi/util").template
+    local Screen = Device.screen
     local ReaderView = require("apps/reader/modules/readerview")
     local _ReaderView_paintTo_orig = ReaderView.paintTo
     local zen_plugin = rawget(_G, "__ZEN_UI_PLUGIN")
@@ -31,6 +31,9 @@ local function apply_reader_clock()
         local features = plugin and plugin.config and plugin.config.features
         return type(features) == "table" and features.reader_clock == true
     end
+
+    -- Stable reference so suspend/resume can cancel/restart the timer.
+    local _autoRefresh
 
     ReaderView.paintTo = function(self, bb, x, y)
         _ReaderView_paintTo_orig(self, bb, x, y)
@@ -68,60 +71,24 @@ local function apply_reader_clock()
         local header_use_book_margins = true
         local header_margin = Size.padding.large -- used when header_use_book_margins is false
         local header_max_width_pct = 100 -- max width before truncating
-        local separator = {
-            bar     = "|",
-            bullet  = "•",
-            dot     = "·",
-            em_dash = "—",
-            en_dash = "-",
-        }
         -- ===========================!!!!!!!!!!!!!!!=========================== -
 
 
 
-        -- You probably don't need to change anything in the section below this line
+        -- Clock:
+        local use_12h = G_reader_settings:isTrue("twelve_hour_clock")
+        local clock_position = (type(zen_clock_config) == "table" and zen_clock_config.position) or "center"
+        local time = datetime.secondsToHour(os.time(), use_12h) or ""
+        -- Book metadata:
         local book_title = ""
         local book_author = ""
         if self.ui.doc_props then
             book_title = self.ui.doc_props.display_title or ""
             book_author = self.ui.doc_props.authors or ""
-            if book_author:find("\n") then -- Show first author if multiple authors
-                book_author =  T(_("%1 et al."), util.splitToArray(book_author, "\n")[1] .. ",")
+            if book_author:find("\n") then -- Show first author if multiple
+                book_author = T(_("%1 et al."), util.splitToArray(book_author, "\n")[1] .. ",")
             end
         end
-        -- Page count and percentage
-        local pageno = self.state.page or 1
-        local pages = self.ui.doc_settings.data.doc_pages or 1
-        local page_progress = ("%d / %d"):format(pageno, pages)
-        local pages_left_book  = pages - pageno
-        local percentage = (pageno / pages) * 100 -- Format like %.1f in header_string below
-        -- Chapter Info
-        local book_chapter = ""
-        local pages_chapter = 0
-        local pages_left = 0
-        local pages_done = 0
-        if self.ui.toc then
-            book_chapter = self.ui.toc:getTocTitleByPage(pageno) or ""
-            pages_chapter = self.ui.toc:getChapterPageCount(pageno) or pages
-            pages_left = self.ui.toc:getChapterPagesLeft(pageno) or self.ui.document:getTotalPagesLeft(pageno)
-            pages_done = self.ui.toc:getChapterPagesDone(pageno) or 0
-        end
-        pages_done = pages_done + 1 -- include current page
-        local chapter_progress = pages_done .. " ⁄⁄ " .. pages_chapter
-        -- Clock:
-        local use_12h = G_reader_settings:isTrue("twelve_hour_clock")
-        local clock_position = (type(zen_clock_config) == "table" and zen_clock_config.position) or "center"
-        local time = datetime.secondsToHour(os.time(), use_12h) or ""
-        -- Battery:
-        local battery = ""
-        if Device:hasBattery() then
-            local power_dev = Device:getPowerDevice()
-            local batt_lvl = power_dev:getCapacity() or 0
-            local is_charging = power_dev:isCharging() or false
-            local batt_prefix = power_dev:getBatterySymbol(power_dev:isCharged(), is_charging, batt_lvl) or ""
-            battery = batt_prefix .. batt_lvl .. "%"
-        end
-        -- You probably don't need to change anything in the section above this line
 
 
 
@@ -194,27 +161,50 @@ local function apply_reader_clock()
             }
         end
         header:paintTo(bb, x, y)
+        -- Free FFI-backed widget memory immediately after paint.
+        header_text:free()
 
-        -- Periodic refresh so the clock updates even when idle
+        -- Periodic refresh so the clock updates even when idle.
+        -- Armed once per ReaderView instance; cancelled on suspend, restarted on resume.
         if not self._header_clock_refresh then
             self._header_clock_refresh = true
             local view = self
-            local function autoRefresh()
-                if view.ui and view.ui.document then
-                    -- Only dirty the reader when it's the topmost widget; prevents
-                    -- the clock from bleeding over fullscreen modals like BookStatusWidget
-                    local stack = UIManager._window_stack
-                    local top = stack and stack[#stack]
-                    if top then
-                        local w = top.widget
-                        if w == view.ui or w == view.ui.show_parent then
-                            UIManager:setDirty(view.ui.show_parent or view.ui, "ui")
-                        end
+            _autoRefresh = function()
+                if not (view.ui and view.ui.document) then
+                    _autoRefresh = nil
+                    return
+                end
+                -- Only dirty the reader when it's the topmost widget; prevents
+                -- the clock from bleeding over fullscreen modals like BookStatusWidget
+                local stack = UIManager._window_stack
+                local top = stack and stack[#stack]
+                if top then
+                    local w = top.widget
+                    if w == view.ui or w == view.ui.show_parent then
+                        UIManager:setDirty(view.ui.show_parent or view.ui, "ui")
                     end
-                    UIManager:scheduleIn(60, autoRefresh)
+                end
+                UIManager:scheduleIn(60, _autoRefresh)
+            end
+            UIManager:scheduleIn(60, _autoRefresh)
+
+            -- Cancel timer on suspend so it does not fire during sleep.
+            local ReaderUI = require("apps/reader/readerui")
+            local orig_onSuspend = ReaderUI.onSuspend
+            ReaderUI.onSuspend = function(rui, ...)
+                if orig_onSuspend then orig_onSuspend(rui, ...) end
+                if _autoRefresh then
+                    UIManager:unschedule(_autoRefresh)
                 end
             end
-            UIManager:scheduleIn(60, autoRefresh)
+            local orig_onResume = ReaderUI.onResume
+            ReaderUI.onResume = function(rui, ...)
+                if orig_onResume then orig_onResume(rui, ...) end
+                if _autoRefresh then
+                    UIManager:unschedule(_autoRefresh)
+                    UIManager:scheduleIn(60, _autoRefresh)
+                end
+            end
         end
     end
 end

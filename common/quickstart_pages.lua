@@ -10,6 +10,7 @@ local M = {}
 
 local _ = require("gettext")
 local T = require("ffi/util").template
+local paths = require("common/paths")
 
 local _plugin_root = require("common/plugin_root") or ""
 
@@ -58,7 +59,7 @@ local function loadQuickstartCovers(n)
     end
 
     if #covers < n then
-        local home = G_reader_settings and G_reader_settings:readSetting("home_dir")
+        local home = paths.getHomeDir()
         if home and lfs.attributes(home, "mode") == "directory" then
             local file_list = {}
             for fname in lfs.dir(home) do
@@ -751,7 +752,7 @@ function M.build_install_pages(ctx)
 
     -- Insert home folder page before finale if home_dir has not been customized.
     do
-        local current_home = G_reader_settings and G_reader_settings:readSetting("home_dir")
+        local current_home = paths.getHomeDir()
         if not current_home or current_home == "" then
             -- Detect the device's primary storage root for path suggestions.
             local base_storage = "/"

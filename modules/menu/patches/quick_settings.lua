@@ -27,6 +27,7 @@ local function apply_quick_settings()
     local build_warmth_slider     = require("modules/menu/patches/warmth_slider")
     local _ = require("gettext")
     local Screen = Device.screen
+    local Dispatcher = require("dispatcher")
 
     local zen_plugin = rawget(_G, "__ZEN_UI_PLUGIN")
     if not zen_plugin or type(zen_plugin.config) ~= "table" then
@@ -50,7 +51,7 @@ local function apply_quick_settings()
     -- ============================================================
 
     local config_default = {
-        button_order = { "wifi", "night", "rotate", "zen", "lockdown", "usb", "search", "quickrss", "cloud", "zlibrary", "calibre", "calibre_search", "notion", "streak", "opds", "filebrowser", "puzzle", "crossword", "connections", "stats_progress", "stats_calendar", "kosync", "restart", "exit", "sleep" },
+        button_order = { "wifi", "night", "rotate", "zen", "lockdown", "usb", "search", "quickrss", "cloud", "zlibrary", "calibre", "calibre_search", "notion", "streak", "opds", "localsend", "filebrowser", "puzzle", "crossword", "connections", "chess", "casualchess", "stats_progress", "stats_calendar", "battery_stats", "kosync", "restart", "exit", "sleep", "screenshot" },
         show_buttons = {
             wifi = true,
             night = true,
@@ -77,10 +78,17 @@ local function apply_quick_settings()
             connections = false,
             stats_progress = false,
             stats_calendar = false,
+            battery_stats = false,
             kosync = false,
+            chess = false,
+            casualchess = false,
+            localsend = false,
+            screenshot = false,
         },
         show_frontlight = true,
         show_warmth = true,
+        custom_buttons = {},  -- array of { id, label, icon, action }
+        next_custom_id = 0,
     }
 
     local config
@@ -141,6 +149,40 @@ local function apply_quick_settings()
                     seen[id] = true
                     table.insert(config.button_order, id)
                 end
+            end
+        end
+        -- Sync custom button IDs into button_order and show_buttons
+        if type(config.custom_buttons) ~= "table" then config.custom_buttons = {} end
+        if type(config.next_custom_id) ~= "number" then config.next_custom_id = 0 end
+        local cb_ids = {}
+        for _, cb in ipairs(config.custom_buttons) do
+            if type(cb.id) == "string" then
+                cb_ids[cb.id] = true
+                if config.show_buttons[cb.id] == nil then
+                    config.show_buttons[cb.id] = true
+                end
+            end
+        end
+        -- Remove stale cb_ entries (deleted custom buttons) from button_order
+        local clean_order = {}
+        for _, id in ipairs(config.button_order) do
+            if id:sub(1, 3) ~= "cb_" or cb_ids[id] then
+                table.insert(clean_order, id)
+            end
+        end
+        config.button_order = clean_order
+        -- Append new custom button IDs not yet in button_order
+        local in_order = {}
+        for _, id in ipairs(config.button_order) do in_order[id] = true end
+        for _, cb in ipairs(config.custom_buttons) do
+            if type(cb.id) == "string" and not in_order[cb.id] then
+                table.insert(config.button_order, cb.id)
+            end
+        end
+        -- Remove stale cb_ entries from show_buttons
+        for key in pairs(config.show_buttons) do
+            if key:sub(1, 3) == "cb_" and not cb_ids[key] then
+                config.show_buttons[key] = nil
             end
         end
         zen_plugin.config.quick_settings = config
@@ -240,7 +282,7 @@ local function apply_quick_settings()
             icon = "quick_rotate",
             label = _("Rotate"),
             callback = function()
-                UIManager:broadcastEvent(Event:new("SwapRotation"))
+                UIManager:broadcastEvent(Event:new("IterateRotation"))
             end,
         },
         usb = {
@@ -331,7 +373,7 @@ local function apply_quick_settings()
         },
         calibre_search = {
             icon = "quick_search",
-            label = _("Cal. Search"),
+            label = _("Search"),
             visible_func = function() return hasPlugin("calibre") end,
             callback = function(touch_menu)
                 touch_menu:closeMenu()
@@ -386,6 +428,24 @@ local function apply_quick_settings()
             callback = function(touch_menu)
                 touch_menu:closeMenu()
                 UIManager:broadcastEvent(Event:new("ShowOPDSCatalog"))
+            end,
+        },
+        localsend = {
+            icon = "quick_localsend",
+            label = _("LocalSend"),
+            visible_func = function() return hasPlugin("localsend") end,
+            active_func = function()
+                local f = io.open("/tmp/localsend_koreader.pid", "r")
+                if f then f:close(); return true end
+                return false
+            end,
+            callback = function(touch_menu)
+                UIManager:broadcastEvent(Event:new("ToggleLocalSend"))
+                UIManager:scheduleIn(1.5, function()
+                    if touch_menu._qs_refs then
+                        touch_menu:updateItems(1)
+                    end
+                end)
             end,
         },
         zen = {
@@ -502,6 +562,15 @@ local function apply_quick_settings()
                 UIManager:broadcastEvent(Event:new("ShowCalendarView"))
             end,
         },
+        battery_stats = {
+            icon = "quick_battery",
+            label = _("Battery"),
+            visible_func = function() return hasPlugin("batterystat") end,
+            callback = function(touch_menu)
+                touch_menu:closeMenu()
+                UIManager:broadcastEvent(Event:new("ShowBatteryStatistics"))
+            end,
+        },
         kosync = {
             icon = "quick_sync",
             label = _("Sync"),
@@ -545,6 +614,34 @@ local function apply_quick_settings()
                 end
             end,
         },
+        screenshot = {
+            icon = "quick_screenshot",
+            label = _("Screenshot"),
+            callback = function(touch_menu)
+                touch_menu:closeMenu()
+                UIManager:scheduleIn(0.3, function()
+                    require("common/countdown_screenshot").run()
+                end)
+            end,
+        },
+        chess = {
+            icon = "quick_chess",
+            label = _("Chess"),
+            visible_func = function() return hasPlugin("kochess") end,
+            callback = function(touch_menu)
+                touch_menu:closeMenu()
+                UIManager:broadcastEvent(Event:new("KochessStart"))
+            end,
+        },
+        casualchess = {
+            icon = "quick_chess",
+            label = _("Chess"),
+            visible_func = function() return hasPlugin("casualkochess") end,
+            callback = function(touch_menu)
+                touch_menu:closeMenu()
+                UIManager:broadcastEvent(Event:new("CasualChessStart"))
+            end,
+        },
 
     }
 
@@ -562,6 +659,26 @@ local function apply_quick_settings()
         local refs = { buttons = {}, sliders = {}, toggles = {} }
 
         -- ----- Top row: action buttons -----
+
+        -- Inject custom button defs at render time so changes take effect
+        -- without a restart (config is always current at this point).
+        if type(config.custom_buttons) == "table" then
+            for _i, cb in ipairs(config.custom_buttons) do
+                local cb_action = cb.action
+                button_defs[cb.id] = {
+                    icon = cb.icon or "zen_ui",
+                    label = (cb.label and cb.label ~= "") and cb.label
+                        or (cb_action and next(cb_action) and Dispatcher:menuTextFunc(cb_action))
+                        or _("Custom"),
+                    callback = function(tm)
+                        tm:closeMenu()
+                        if type(cb_action) == "table" and next(cb_action) then
+                            Dispatcher:execute(cb_action)
+                        end
+                    end,
+                }
+            end
+        end
 
         local visible_buttons = {}
         for _, id in ipairs(config.button_order) do

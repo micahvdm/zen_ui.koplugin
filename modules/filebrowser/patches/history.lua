@@ -62,13 +62,93 @@ local function apply_history()
         end
     end
 
-    local function clean_nav(menu)
+    local function show_hist_blank_menu(hist_mgr, hist_menu)
+        local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
+        local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
+        if type(ft) == "table" and ft.lockdown_mode == true
+                and type(lc) == "table" and lc.disable_context_menu == true then
+            return
+        end
+        local ButtonDialog_hm = require("ui/widget/buttondialog")
+        local UIManager_hm    = require("ui/uimanager")
+        local _hm             = require("gettext")
+        local ok_bim, bim     = pcall(require, "bookinfomanager")
+        local cur_mode
+        if ok_bim and bim then
+            local ok3, m = pcall(function()
+                return bim:getSetting("history_display_mode")
+            end)
+            if ok3 then cur_mode = m end
+        end
+        local function apply_mode(mode)
+            -- Use CoverBrowser to apply new mode (saves to DB + repatches updateItemTable)
+            local cb = hist_mgr.ui and hist_mgr.ui.coverbrowser
+            if cb and type(cb.setupWidgetDisplayMode) == "function" then
+                pcall(cb.setupWidgetDisplayMode, "history", mode)
+            elseif ok_bim and bim then
+                pcall(bim.saveSetting, bim, "history_display_mode", mode)
+            end
+            if hist_menu then UIManager_hm:close(hist_menu) end
+            UIManager_hm:nextTick(function()
+                hist_mgr:onShowHist()
+            end)
+        end
+        local view_dialog
+        local function viewBtn(label, icon, mode)
+            local active = cur_mode == mode
+            return {{
+                text     = icon .. "  " .. label .. (active and "  \u{2713}" or ""),
+                align    = "left",
+                enabled  = not active,
+                callback = function()
+                    UIManager_hm:close(view_dialog)
+                    apply_mode(mode)
+                end,
+            }}
+        end
+        view_dialog = ButtonDialog_hm:new{
+            title       = _hm("Display mode"),
+            title_align = "center",
+            buttons     = {
+                viewBtn(_hm("Mosaic"),          "\u{F00A}", "mosaic_image"),
+                viewBtn(_hm("List (detailed)"), "\u{F03A}", "list_image_meta"),
+                viewBtn(_hm("List (basic)"),    "\u{F0CA}", "list_image_filename"),
+            },
+        }
+        UIManager_hm:show(view_dialog)
+        return true
+    end
+
+    local function clean_nav(menu, hist_mgr)
         if not menu then return end
 
         -- === Fix partial-row left-alignment ===
         menu._do_center_partial_rows = false
         local UIManager = require("ui/uimanager")
         menu:updateItems(1, true)
+
+        -- Blank-space hold: open history display mode menu
+        if hist_mgr then
+            local Device_h = require("device")
+            if Device_h:isTouchDevice() then
+                local GestureRange_h = require("ui/gesturerange")
+                local Geom_h         = require("ui/geometry")
+                if not menu.ges_events then menu.ges_events = {} end
+                menu.ges_events.ZenHistBlankHold = {
+                    GestureRange_h:new{
+                        ges   = "hold",
+                        range = Geom_h:new{
+                            x = 0, y = 0,
+                            w = Device_h.screen:getWidth(),
+                            h = Device_h.screen:getHeight(),
+                        },
+                    },
+                }
+                menu.onZenHistBlankHold = function()
+                    return show_hist_blank_menu(hist_mgr, menu)
+                end
+            end
+        end
 
         -- === Permanently suppress the back-arrow button ===
         local arrow = menu.page_return_arrow
@@ -138,24 +218,9 @@ local function apply_history()
 
     local orig_onShowHist = FileManagerHistory.onShowHist
     function FileManagerHistory:onShowHist(search_info)
-        -- Sync the history display mode to match the filemanager (library)
-        -- display mode BEFORE orig_onShowHist runs, because that call creates
-        -- booklist_menu and immediately calls updateItemTable — which is when
-        -- CoverBrowser patches the instance with mosaic/list overrides.
-        if is_enabled() and self.ui then
-            local coverbrowser = self.ui.coverbrowser
-            if coverbrowser and type(coverbrowser.setupWidgetDisplayMode) == "function" then
-                local BookInfoManager = require("bookinfomanager")
-                local fm_mode   = BookInfoManager:getSetting("filemanager_display_mode")
-                local hist_mode = BookInfoManager:getSetting("history_display_mode")
-                if fm_mode ~= hist_mode then
-                    coverbrowser.setupWidgetDisplayMode("history", fm_mode)
-                end
-            end
-        end
         orig_onShowHist(self, search_info)
         if not is_enabled() then return end
-        clean_nav(self.booklist_menu)
+        clean_nav(self.booklist_menu, self)
     end
 
     -- Replace the default hold dialog with the zen context menu.

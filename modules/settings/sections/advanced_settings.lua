@@ -5,6 +5,7 @@
 local _ = require("gettext")
 local UIManager = require("ui/uimanager")
 local utils = require("modules/settings/zen_settings_utils")
+local paths = require("common/paths")
 
 local M = {}
 
@@ -101,9 +102,7 @@ function M.build(ctx)
 
             if enabling then
                 local current_dir = utils.get_current_dir()
-                local home_dir = utils.get_home_dir()
-                local is_outside_home = current_dir ~= home_dir
-                    and current_dir:sub(1, #home_dir + 1) ~= home_dir .. "/"
+                local is_outside_home = not paths.isInHomeDir(current_dir)
                 G_reader_settings:saveSetting("show_hidden", is_outside_home)
                 G_reader_settings:saveSetting("show_unsupported", is_outside_home)
             else

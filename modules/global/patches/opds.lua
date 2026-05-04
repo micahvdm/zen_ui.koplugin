@@ -12,6 +12,7 @@ local function apply_opds()
     if OPDSBrowser._zen_opds_patched then return end
     OPDSBrowser._zen_opds_patched = true
 
+    local BD              = require("ui/bidi")
     local Blitbuffer      = require("ffi/blitbuffer")
     local CenterContainer = require("ui/widget/container/centercontainer")
     local Font            = require("ui/font")
@@ -132,6 +133,33 @@ local function apply_opds()
 
     local _corner_radius = Screen:scaleBySize(8)
     local _plugin = rawget(_G, "__ZEN_UI_PLUGIN")
+
+    -- Mosaic title strip: read at apply time; mirrors mosaic_title_strip.lua logic.
+    local _strip_show_title, _strip_show_author, _strip_h = false, false, 0
+    do
+        local p = _plugin or rawget(_G, "__ZEN_UI_PLUGIN")
+        local sc = p and type(p.config) == "table"
+            and type(p.config.mosaic_title_strip) == "table"
+            and p.config.mosaic_title_strip or nil
+        _strip_show_title  = sc and sc.show_title  == true or false
+        _strip_show_author = sc and sc.show_author == true or false
+        if _strip_show_title or _strip_show_author then
+            local TITLE_FONT  = 16
+            local AUTHOR_FONT = 13
+            local _PAD        = Screen:scaleBySize(3)
+            local _GAP        = Screen:scaleBySize(2)
+            local function measure_h(fsz, bold)
+                local tw = TextWidget:new{ text = "Ag", face = Font:getFace("cfont", fsz),
+                    bold = bold, padding = 0 }
+                local h = tw:getSize().h; tw:free(); return h
+            end
+            _strip_h = _PAD
+            if _strip_show_title  then _strip_h = _strip_h + measure_h(TITLE_FONT, true) end
+            if _strip_show_title and _strip_show_author then _strip_h = _strip_h + _GAP end
+            if _strip_show_author then _strip_h = _strip_h + measure_h(AUTHOR_FONT, false) end
+            _strip_h = _strip_h + _PAD
+        end
+    end
 
     local function rounded_corners_enabled()
         local plug = _plugin or rawget(_G, "__ZEN_UI_PLUGIN")
@@ -297,11 +325,12 @@ local function apply_opds()
         return true
     end
 
-    -- Mosaic grid cell: portrait cover centered, truncated title below.
+    -- Mosaic grid cell: portrait cover centered, optional title/author strip below.
     local OPDSMosaicItem = InputContainer:extend{
         entry = nil, cover_w = nil, cover_h = nil,
         cell_w = nil, cell_h = nil,
         show_parent = nil, menu = nil,
+        strip_h = 0, show_title = false, show_author = false,
     }
 
     function OPDSMosaicItem:init()
@@ -311,6 +340,7 @@ local function apply_opds()
             HoldSelect = { GestureRange:new{ ges = "hold", range = self.dimen } },
         }
         local entry = self.entry
+        local cover_area_h = self.cell_h - self.strip_h
         local cover_inner
         if entry.cover_bb then
             cover_inner = ImageWidget:new{
@@ -323,14 +353,49 @@ local function apply_opds()
                 background = Blitbuffer.COLOR_LIGHT_GRAY,
             }
         end
+        local inner
+        if self.strip_h > 0 then
+            local TITLE_FONT  = 16
+            local AUTHOR_FONT = 13
+            local PAD_H       = Screen:scaleBySize(6)
+            local text_w      = self.cell_w - 2 * PAD_H
+            local strip_group = VGroup:new{ align = "center" }
+            if self.show_title then
+                table.insert(strip_group, TextWidget:new{
+                    text = BD.auto(entry.title or entry.text or ""),
+                    face = Font:getFace("cfont", TITLE_FONT),
+                    bold = true, padding = 0,
+                    max_width = text_w, truncate_with_ellipsis = true,
+                })
+            end
+            if self.show_author and entry.author and entry.author ~= "" then
+                table.insert(strip_group, TextWidget:new{
+                    text = BD.auto(entry.author),
+                    face = Font:getFace("cfont", AUTHOR_FONT),
+                    bold = false, padding = 0,
+                    max_width = text_w, truncate_with_ellipsis = true,
+                })
+            end
+            inner = VGroup:new{ align = "center" }
+            table.insert(inner, CenterContainer:new{
+                dimen = Geom:new{ w = self.cell_w, h = cover_area_h },
+                cover_inner,
+            })
+            table.insert(inner, CenterContainer:new{
+                dimen = Geom:new{ w = self.cell_w, h = self.strip_h },
+                strip_group,
+            })
+        else
+            inner = CenterContainer:new{
+                dimen = Geom:new{ w = self.cell_w, h = self.cell_h },
+                cover_inner,
+            }
+        end
         self[1] = FrameContainer:new{
             width = self.cell_w, height = self.cell_h,
             bordersize = 0, padding = 0,
             background = Blitbuffer.COLOR_WHITE,
-            CenterContainer:new{
-                dimen = Geom:new{ w = self.cell_w, h = self.cell_h },
-                cover_inner,
-            },
+            inner,
         }
     end
 
@@ -339,9 +404,10 @@ local function apply_opds()
         self._screen_y = y
         InputContainer.paintTo(self, bb, x, y)
         if not rounded_corners_enabled() then return end
-        -- cover is centered in the cell
+        -- cover is centered in the cover area (above the strip)
+        local cover_area_h = self.cell_h - self.strip_h
         local cx = x + math.floor((self.cell_w - self.cover_w) / 2)
-        local cy = y + math.floor((self.cell_h - self.cover_h) / 2)
+        local cy = y + math.floor((cover_area_h - self.cover_h) / 2)
         paintCornerMasks(bb, cx, cy, self.cover_w, self.cover_h, _corner_radius)
         paintCornerBorderArcs(bb, cx, cy, self.cover_w, self.cover_h, _corner_radius, Blitbuffer.COLOR_BLACK)
     end
@@ -481,17 +547,18 @@ local function apply_opds()
         local pending_covers = {}
 
         if mosaic_mode then
-            -- Grid: fill avail_h exactly; clamp rows if cell would be too small.
+            -- Grid: match MosaicMenu spacing (item_margin around and between all cells).
+            local item_margin = Screen:scaleBySize(10)
             local num_cols = nb_cols_setting
             local num_rows = nb_rows_setting
-            local cell_w   = math.floor(self.inner_dimen.w / num_cols)
-            -- Clamp rows so covers aren't too tiny (min cover_h ~40px).
-            local min_cell_h = 40 + PAD_V * 2
-            local num_rows_max = math.max(1, math.floor(avail_h / min_cell_h))
+            local cell_w = math.floor((self.inner_dimen.w - (1 + num_cols) * item_margin) / num_cols)
+            -- Clamp rows so the cover area is at least ~40px after strip.
+            local min_cell_h = 40 + _strip_h + PAD_V * 2 + item_margin
+            local num_rows_max = math.max(1, math.floor((avail_h - item_margin) / min_cell_h))
             if num_rows > num_rows_max then num_rows = num_rows_max end
-            -- Fill avail_h exactly so no gap at bottom.
-            local cell_h  = math.floor(avail_h / num_rows)
-            local cover_h = math.max(1, cell_h - PAD_V * 2)
+            local cell_h = math.floor((avail_h - (1 + num_rows) * item_margin) / num_rows)
+            local cover_area_h = cell_h - _strip_h
+            local cover_h = math.max(1, cover_area_h - PAD_V * 2)
             local cover_w = math.floor(cover_h * 2 / 3)
             self.item_height = cell_h
             self.perpage     = num_cols * num_rows
@@ -500,7 +567,8 @@ local function apply_opds()
             self.item_width  = self.inner_dimen.w
             self.item_dimen  = Geom:new{ x = 0, y = 0, w = cell_w, h = cell_h }
             logger.dbg("OPDS mosaic: cols=", num_cols, "rows=", num_rows,
-                "cell=", cell_w, "x", cell_h, "cover=", cover_w, "x", cover_h)
+                "cell=", cell_w, "x", cell_h, "cover=", cover_w, "x", cover_h,
+                "strip_h=", _strip_h)
 
             local idx_s = (self.page - 1) * self.perpage + 1
             local idx_e = math.min(self.page * self.perpage, #self.item_table)
@@ -508,6 +576,8 @@ local function apply_opds()
             while idx <= idx_e do
                 local row_widgets = {}
                 local row_group   = HGroup:new{ align = "top" }
+                table.insert(self.item_group, VSpan:new{ width = item_margin })
+                table.insert(row_group, HSpan:new{ width = item_margin })
                 for col = 1, num_cols do
                     local entry = self.item_table[idx]
                     if entry then
@@ -520,6 +590,8 @@ local function apply_opds()
                             entry = entry, cover_w = cover_w, cover_h = cover_h,
                             cell_w = cell_w, cell_h = cell_h,
                             show_parent = self.show_parent, menu = self,
+                            strip_h = _strip_h,
+                            show_title = _strip_show_title, show_author = _strip_show_author,
                         }
                         table.insert(row_group, w)
                         table.insert(row_widgets, w)
@@ -534,11 +606,13 @@ local function apply_opds()
                     else
                         table.insert(row_group, HSpan:new{ width = cell_w })
                     end
+                    table.insert(row_group, HSpan:new{ width = item_margin })
                     idx = idx + 1
                 end
                 table.insert(self.item_group, row_group)
                 table.insert(self.layout, row_widgets)
             end
+            table.insert(self.item_group, VSpan:new{ width = item_margin })
         else
             -- Single-column list: cover left, title/author/mandatory right.
             local cover_h, list_perpage

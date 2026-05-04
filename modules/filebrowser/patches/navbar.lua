@@ -14,10 +14,12 @@ local function apply_navbar()
     local InputContainer = require("ui/widget/container/inputcontainer")
     local LineWidget = require("ui/widget/linewidget")
     local TextWidget = require("ui/widget/textwidget")
+    local Event = require("ui/event")
     local UIManager = require("ui/uimanager")
     local VerticalGroup = require("ui/widget/verticalgroup")
     local VerticalSpan = require("ui/widget/verticalspan")
     local utils = require("common/utils")
+    local paths = require("common/paths")
     local Screen = Device.screen
     local _ = require("gettext")
     local lfs = require("libs/libkoreader-lfs")
@@ -64,13 +66,14 @@ local function apply_navbar()
             series = false,
             to_be_read = false,
             search = false,
+            calibre_search = false,
             stats = false,
             exit = false,
             page_left = false,
             page_right = false,
             menu = false,
         },
-        tab_order = { "page_left", "books", "manga", "news", "bible", "continue", "authors", "series", "to_be_read", "history", "favorites", "collections", "stats", "search", "exit", "page_right", "menu" },
+        tab_order = { "page_left", "books", "manga", "news", "continue", "authors", "series", "to_be_read", "history", "favorites", "collections", "stats", "search", "calibre_search", "exit", "page_right", "menu" },
         show_labels = true,
         books_label = "Library",
         manga_action = "rakuyomi",
@@ -188,6 +191,11 @@ local function apply_navbar()
             icon = "appbar.search",
         },
         {
+            id = "calibre_search",
+            label = _("Search"),
+            icon = "appbar.search",
+        },
+        {
             id = "stats",
             label = _("Stats"),
             icon = "tab_stats",
@@ -222,6 +230,7 @@ local function apply_navbar()
     -- === Active tab tracking ===
 
     local active_tab = "books"
+    local _navbar_focused_idx = nil  -- keyboard-focused tab index (nil = file list has focus)
     local _last_menu_item = nil  -- tracks last long-held item for the menu tab
 
     -- Forward declarations; defined later
@@ -232,6 +241,7 @@ local function apply_navbar()
 
     local function setActiveTab(id)
         active_tab = id
+        _navbar_focused_idx = nil
         local fm = FileManager.instance
         if fm then
             injectNavbar(fm)
@@ -245,7 +255,7 @@ local function apply_navbar()
         local fm = FileManager.instance
         if not fm then return end
         utils.closeWidgetsAbove(fm)
-        local home_dir = G_reader_settings:readSetting("home_dir")
+        local home_dir = paths.getHomeDir()
                          or require("apps/filemanager/filemanagerutil").getDefaultDir()
         fm.file_chooser.path_items[home_dir] = nil
         fm.file_chooser:changeToPath(home_dir)
@@ -384,6 +394,18 @@ local function apply_navbar()
         end
     end
 
+    local function onTabCalibreSearch()
+        local fm = FileManager.instance
+        if not fm or not fm.calibre then
+            local InfoMessage = require("ui/widget/infomessage")
+            UIManager:show(InfoMessage:new{
+                text = _("Calibre plugin is not installed."),
+            })
+            return
+        end
+        UIManager:broadcastEvent(Event:new("CalibreSearch"))
+    end
+
     local function onTabStats()
         local StatsPage = require("modules/filebrowser/patches/stats_page")
         local _createStatusRow = zen_plugin._zen_shared
@@ -450,6 +472,7 @@ local function apply_navbar()
         series = onTabSeries,
         to_be_read = onTabTBR,
         search = onTabSearch,
+        calibre_search = onTabCalibreSearch,
         stats = onTabStats,
         exit = onTabExit,
         page_left = onTabPageLeft,
@@ -555,7 +578,7 @@ local function apply_navbar()
         return navbar_font_size_steps[#navbar_font_size_steps]
     end
 
-    local function createTabWidget(tab, label_max_w, is_active, font_size)
+    local function createTabWidget(tab, label_max_w, is_active, font_size, is_focused)
         local styled = is_active and config.active_tab_styling
         local use_color = styled and config.colored and Screen:isColorScreen()
         local active_color
@@ -677,7 +700,18 @@ local function apply_navbar()
             VerticalSpan:new{ width = v_pad },
         }
 
-        return VerticalGroup:new(children)
+        local widget = VerticalGroup:new(children)
+        if is_focused then
+            local FrameContainer = require("ui/widget/container/framecontainer")
+            return FrameContainer:new{
+                background = Blitbuffer.COLOR_LIGHT_GRAY,
+                bordersize = 0,
+                padding = 0,
+                margin = 0,
+                widget,
+            }
+        end
+        return widget
     end
 
     -- === Build the full navbar ===
@@ -754,7 +788,7 @@ local function apply_navbar()
         local tab_widgets = {}
         local total_content_w = 0
         for i, tab in ipairs(visible_tabs) do
-            local widget = createTabWidget(tab, label_max_w, tab.id == active_tab, shared_font_size)
+            local widget = createTabWidget(tab, label_max_w, tab.id == active_tab, shared_font_size, i == _navbar_focused_idx)
             tab_widgets[i] = widget
             total_content_w = total_content_w + widget:getSize().w
         end
@@ -970,9 +1004,9 @@ local function apply_navbar()
         end
         -- Check home dir for books
         if not new_tab then
-            local home_dir = G_reader_settings:readSetting("home_dir")
+            local home_dir = paths.getHomeDir()
                              or require("apps/filemanager/filemanagerutil").getDefaultDir()
-            if home_dir and (path == home_dir or startsWith(path, home_dir .. "/")) then
+            if home_dir and paths.isInHomeDir(path) then
                 new_tab = "books"
             end
         end
@@ -1053,8 +1087,256 @@ local function apply_navbar()
         local new_height = Screen:getHeight() - navbar_h
         resizeFileChooser(file_chooser, new_height)
 
+    -- Patch key navigation onto file_chooser instance (once per lifetime).
+    -- Left/Right: drop/cycle navbar focus. Down from last item: drop to navbar.
+    -- Press (held): context menu. Press (tap) / Return: activate.
+    -- Up/Down/Back from navbar: return to file list. PgFwd/PgBack: page turns.
+    if Device:hasKeys() and not file_chooser._zen_navbar_key_patched then
+        file_chooser._zen_navbar_key_patched = true
+        local cls_kp = file_chooser.onKeyPress
+        local cls_kr = file_chooser.onKeyRelease
+        local HOLD_DELAY = 0.4
+        local _press_hold_fn = nil   -- scheduled hold callback (nil = not pending)
+        local _press_ctx = nil       -- "navbar" or "filelist" when hold pending
+        local _back_btn_focused = false  -- status bar back chevron has keyboard focus
+
+        local function repaintStatusBar()
+            local fm2 = FileManager.instance
+            if fm2 then
+                fm2._zen_back_btn_focused = _back_btn_focused
+                if fm2._updateStatusBar then fm2:_updateStatusBar() end
+                UIManager:setDirty(fm2, "ui")
+            end
+        end
+
+        local function repaintNavbar()
+            local fm2 = FileManager.instance
+            if fm2 then injectNavbar(fm2); UIManager:setDirty(fm2, "ui") end
+        end
+
+        -- Activate the currently focused navbar tab (tap behaviour).
+        local function activateNavbarTab()
+            local vis_tabs = getVisibleTabs()
+            local idx = _navbar_focused_idx
+            _navbar_focused_idx = nil
+            local tab = vis_tabs and vis_tabs[idx]
+            if not tab then return end
+            local tid = tab.id
+            local track = tid == "books" or tid == "manga"
+                or tid == "news"    or tid == "authors"
+                or tid == "series"  or tid == "to_be_read"
+                or tid == "history" or tid == "favorites"
+                or tid == "collections"
+            if track and tid ~= active_tab then
+                active_tab = tid
+                local stays = tid == "books"
+                    or (tid == "manga" and config.manga_action == "folder" and config.manga_folder ~= "")
+                    or (tid == "news"  and config.news_action  == "folder" and config.news_folder  ~= "")
+                if stays then
+                    local fm2 = FileManager.instance
+                    if fm2 then injectNavbar(fm2); UIManager:setDirty(fm2, "full") end
+                end
+            end
+            local cb = tab_callbacks[tid]
+            if cb then cb() end
+        end
+
+        -- Focus the navbar at the active tab, starting from the given key direction.
+        local function focusNavbar(direction, vis_tabs)
+            _back_btn_focused = false  -- mutually exclusive with navbar focus
+            local n = #vis_tabs
+            _navbar_focused_idx = 1
+            for i, tab in ipairs(vis_tabs) do
+                if tab.id == active_tab then _navbar_focused_idx = i; break end
+            end
+            if direction == "Right" then
+                _navbar_focused_idx = (_navbar_focused_idx % n) + 1
+            end
+        end
+
+        -- Cancel any pending hold timer, returning whether a tap should fire.
+        local function cancelHold()
+            if _press_hold_fn then
+                UIManager:unschedule(_press_hold_fn)
+                _press_hold_fn = nil
+                local ctx = _press_ctx
+                _press_ctx = nil
+                return ctx  -- "navbar" or "filelist"
+            end
+            return nil
+        end
+
+        -- Show context menu for current directory (navbar hold = blank-space context).
+        local function showCurrentDirMenu(fc)
+            local item = {
+                path = fc.path,
+                is_file = false,
+                is_go_up = false,
+                text = fc.path:match("([^/]+)/?$") or fc.path,
+            }
+            fc:showFileDialog(item)
+        end
+
+        file_chooser.onKeyPress = function(fc, key)
+            local vis_tabs = getVisibleTabs()
+            local n = #vis_tabs
+            if n > 0 then
+                if _navbar_focused_idx then
+                    -- === Navbar focused ===
+                    if key == "Left" then
+                        _navbar_focused_idx = ((_navbar_focused_idx - 2) % n) + 1
+                        repaintNavbar(); return true
+                    elseif key == "Right" then
+                        _navbar_focused_idx = (_navbar_focused_idx % n) + 1
+                        repaintNavbar(); return true
+                    elseif key == "Press" then
+                        -- Hold = current-dir context menu; tap = activate tab.
+                        _press_ctx = "navbar"
+                        _press_hold_fn = function()
+                            _press_hold_fn = nil; _press_ctx = nil
+                            showCurrentDirMenu(fc)
+                        end
+                        UIManager:scheduleIn(HOLD_DELAY, _press_hold_fn)
+                        return true
+                    elseif key == "Return" then
+                        -- Physical keyboard Enter = immediate activate.
+                        activateNavbarTab(); return true
+                    elseif key == "Back" then
+                        _navbar_focused_idx = nil
+                        repaintNavbar(); return true
+                    end
+                else
+                    -- === Back button focused ===
+                    -- "Back" event is handled via file_chooser.onBack below.
+                    -- Only handle keyboard Enter / D-pad OK here.
+                    if _back_btn_focused then
+                        if key == "Return" or key == "Press" then
+                            local fm2 = FileManager.instance
+                            local back_zone = fm2 and fm2._zen_back_tap_zone
+                            if back_zone and back_zone.callback then
+                                back_zone.callback()
+                            end
+                            _back_btn_focused = false
+                            repaintStatusBar()
+                        else
+                            _back_btn_focused = false
+                            repaintStatusBar()
+                        end
+                        return true
+                    end
+                    -- Left (or Right on full D-pad) → focus navbar.
+                    local goes_to_nav = key == "Left"
+                        or (key == "Right" and not Device:hasFewKeys())
+                    if goes_to_nav then
+                        focusNavbar(key, vis_tabs)
+                        repaintNavbar(); return true
+                    end
+                    -- Press: hold = file context menu, tap = open (handled on release).
+                    if key == "Press" then
+                        _press_ctx = "filelist"
+                        _press_hold_fn = function()
+                            _press_hold_fn = nil; _press_ctx = nil
+                            fc:sendHoldEventToFocusedWidget()
+                        end
+                        UIManager:scheduleIn(HOLD_DELAY, _press_hold_fn)
+                        return true  -- don't open file on key-down; wait for release
+                    end
+                end
+            end
+            return cls_kp(fc, key)
+        end
+
+        file_chooser.onKeyRelease = function(fc, key)
+            if key == "Press" then
+                local ctx = cancelHold()
+                if ctx == "navbar" then
+                    activateNavbarTab(); return true
+                elseif ctx == "filelist" then
+                    -- Tap: pass Press to the class handler to open/select the item.
+                    cls_kp(fc, key); return true
+                end
+                -- Hold already fired (fn was nil) — nothing to do.
+                return true
+            end
+            return cls_kr and cls_kr(fc, key)
+        end
+
+        -- All d-pad moves dispatch as FocusMove events (args={dx,dy}), not onKeyPress.
+        -- Patch onFocusMove to handle navbar focus cycling and last-row→navbar.
+        local cls_fm = file_chooser.onFocusMove
+        file_chooser.onFocusMove = function(fc, args)
+            local dx = args and args[1] or 0
+            local dy = args and args[2] or 0
+            local vis_tabs = getVisibleTabs()
+            local n = #vis_tabs
+            if n > 0 then
+                if _navbar_focused_idx then
+                    if dy == -1 then
+                        -- Up from navbar → return to file list
+                        _navbar_focused_idx = nil
+                        repaintNavbar(); return true
+                    elseif dx == -1 then
+                        _navbar_focused_idx = ((_navbar_focused_idx - 2) % n) + 1
+                        repaintNavbar(); return true
+                    elseif dx == 1 then
+                        _navbar_focused_idx = (_navbar_focused_idx % n) + 1
+                        repaintNavbar(); return true
+                    end
+                    return true  -- consume any other move while navbar focused
+                end
+                if _back_btn_focused then
+                    -- Any d-pad move while back button focused: unfocus and consume.
+                    _back_btn_focused = false
+                    repaintStatusBar(); return true
+                end
+                if dy == 1 and fc.selected and fc.layout
+                        and not fc.layout[fc.selected.y + 1] then
+                    -- Down on last row → focus navbar
+                    focusNavbar("Down", vis_tabs)
+                    repaintNavbar(); return true
+                end
+                -- Up from first layout row → focus status bar back chevron.
+                if dy == -1 and fc.selected and fc.layout
+                        and not fc.layout[fc.selected.y - 1] then
+                    local fm2 = FileManager.instance
+                    local back_zone = fm2 and fm2._zen_back_tap_zone
+                    if back_zone and back_zone.callback then
+                        _back_btn_focused = true
+                        repaintStatusBar(); return true
+                    end
+                end
+            end
+            return cls_fm and cls_fm(fc, args)
+        end
+
+        -- Override onBack (the event fired by key_events.Back regardless of
+        -- the physical key name or device Back-group mapping).
+        local cls_ob = file_chooser.onBack
+        file_chooser.onBack = function(fc)
+            if _back_btn_focused then
+                -- Back confirms the focused back-button chevron.
+                local fm2 = FileManager.instance
+                local back_zone = fm2 and fm2._zen_back_tap_zone
+                if back_zone and back_zone.callback then back_zone.callback() end
+                _back_btn_focused = false
+                repaintStatusBar(); return true
+            end
+            if _navbar_focused_idx then
+                -- Back unfocuses the navbar row.
+                _navbar_focused_idx = nil
+                repaintNavbar(); return true
+            end
+            -- Navigate to parent folder via zen back zone.
+            local fm2 = FileManager.instance
+            local back_zone = fm2 and fm2._zen_back_tap_zone
+            if back_zone and back_zone.callback then
+                back_zone.callback(); return true
+            end
+            return cls_ob and cls_ob(fc)
+        end
+    end
+
         fm_ui[1] = VerticalGroup:new{
-            align = "left",
             file_chooser,
             navbar,
         }
@@ -1152,13 +1434,110 @@ local function apply_navbar()
         table.insert(vg_children, menu[1])
         table.insert(vg_children, navbar)
 
+        local vg = VerticalGroup:new(vg_children)
         menu[1] = FrameContainer:new{
             background = Blitbuffer.COLOR_WHITE,
             bordersize = 0,
             padding = 0,
             margin = 0,
-            VerticalGroup:new(vg_children),
+            vg,
         }
+
+        -- Key nav for standalone views (group view, history, favorites, etc.)
+        if Device:hasKeys() and not menu._zen_navbar_key_patched then
+            menu._zen_navbar_key_patched = true
+
+            local function repaintStandaloneNavbar()
+                local saved_active = active_tab
+                active_tab = view_tab_id
+                local new_nb = createNavBar()
+                active_tab = saved_active
+                if not new_nb then return end
+                vg[2] = new_nb  -- replace embedded navbar in VerticalGroup
+                UIManager:setDirty(menu, "ui")
+            end
+
+            local function focusStandaloneNavbar(vis_tabs)
+                _navbar_focused_idx = 1
+                for i, tab in ipairs(vis_tabs) do
+                    if tab.id == view_tab_id then
+                        _navbar_focused_idx = i; break
+                    end
+                end
+            end
+
+            local function activateStandaloneTab()
+                local vis_tabs = getVisibleTabs()
+                local idx = _navbar_focused_idx
+                _navbar_focused_idx = nil
+                local tab = vis_tabs and vis_tabs[idx]
+                if not tab then return end
+                local tapped_id = tab.id
+                if tapped_id == view_tab_id then
+                    menu.page = 1; menu:updateItems(); return
+                end
+                if menu.close_callback then menu.close_callback()
+                elseif menu.onClose then menu:onClose()
+                else UIManager:close(menu) end
+                if menu._zen_close_stack then menu._zen_close_stack() end
+                setActiveTab(tapped_id)
+                local cb = tab_callbacks[tapped_id]
+                if cb then cb() end
+            end
+
+            -- D-pad moves arrive as FocusMove events, not onKeyPress.
+            local cls_sfm = menu.onFocusMove
+            menu.onFocusMove = function(m, args)
+                local dx = args and args[1] or 0
+                local dy = args and args[2] or 0
+                local vis_tabs = getVisibleTabs()
+                local n = #vis_tabs
+                if n > 0 then
+                    if _navbar_focused_idx then
+                        if dy == -1 then
+                            _navbar_focused_idx = nil
+                            repaintStandaloneNavbar(); return true
+                        elseif dx == -1 then
+                            _navbar_focused_idx = ((_navbar_focused_idx - 2) % n) + 1
+                            repaintStandaloneNavbar(); return true
+                        elseif dx == 1 then
+                            _navbar_focused_idx = (_navbar_focused_idx % n) + 1
+                            repaintStandaloneNavbar(); return true
+                        end
+                        return true
+                    end
+                    if dy == 1 and m.selected and m.layout
+                            and not m.layout[m.selected.y + 1] then
+                        focusStandaloneNavbar(vis_tabs)
+                        repaintStandaloneNavbar(); return true
+                    end
+                end
+                return cls_sfm and cls_sfm(m, args)
+            end
+
+            local cls_skp = menu.onKeyPress
+            menu.onKeyPress = function(m, key)
+                local vis_tabs = getVisibleTabs()
+                if #vis_tabs > 0 and _navbar_focused_idx then
+                    if key == "Return" or key == "Press" then
+                        activateStandaloneTab(); return true
+                    end
+                end
+                return cls_skp and cls_skp(m, key)
+            end
+
+            -- Back event (fired by key_events regardless of physical key name).
+            menu.onBack = function(m)
+                if _navbar_focused_idx then
+                    _navbar_focused_idx = nil
+                    repaintStandaloneNavbar(); return true
+                end
+                if m.close_callback then m.close_callback()
+                elseif m.onClose then m:onClose()
+                else UIManager:close(m) end
+                return true
+            end
+        end
 
         -- Top south swipe → open KOReader menu is handled globally by
         -- menu_top_swipe (class-level patch on Menu.onSwipe).

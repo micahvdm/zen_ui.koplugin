@@ -34,6 +34,7 @@ local PATCH_MODULES = {
     history = "modules/filebrowser/patches/history",
     browser_cover_badges = "modules/filebrowser/patches/browser_cover_badges",
     browser_cover_mosaic_uniform = "modules/filebrowser/patches/browser_cover_mosaic_uniform",
+    mosaic_title_strip = "modules/filebrowser/patches/mosaic_title_strip",
     browser_cover_rounded_corners = "modules/filebrowser/patches/browser_cover_rounded_corners",
     browser_show_hidden = "modules/filebrowser/patches/browser_show_hidden",
     browser_page_count = "modules/filebrowser/patches/browser_page_count",
@@ -150,6 +151,12 @@ function M.init(logger, plugin)
                 end)
             end
         end
+    end
+
+    -- Must run after browser_cover_mosaic_uniform so we wrap its already-patched init.
+    local mosaic_title_strip_fn = load_patch("mosaic_title_strip")
+    if mosaic_title_strip_fn then
+        run_feature(logger, plugin, "mosaic_title_strip", mosaic_title_strip_fn)
     end
 
     -- Per-paint guard reads live config; no restart needed to toggle.

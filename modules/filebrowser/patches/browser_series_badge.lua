@@ -66,6 +66,7 @@ local function apply_browser_series_badge()
         local Font       = require("ui/font")
         local Screen     = require("device").screen
         local TextWidget = require("ui/widget/textwidget")
+        local utils      = require("common/utils")
 
         -- Walk the orig_paintTo wrapper chain to find the `uv` accessor function
         -- (lives inside browser_cover_badges' closure, potentially many layers deep).
@@ -84,6 +85,18 @@ local function apply_browser_series_badge()
             return nil
         end
 
+        local _cached_badge_scale    = 1.0
+        local _cached_badge_size_key = false
+        local function get_badge_scale()
+            local cur = _plugin and type(_plugin.config) == "table"
+                and type(_plugin.config.browser_cover_badges) == "table"
+                and _plugin.config.browser_cover_badges.badge_size or false
+            if cur ~= _cached_badge_size_key then
+                _cached_badge_size_key = cur
+                _cached_badge_scale    = utils.getBadgeScale(_plugin and _plugin.config)
+            end
+            return _cached_badge_scale
+        end
         local orig_paintTo = MosaicMenuItem.paintTo
         local _uv_fn = find_uv_fn(orig_paintTo)
 
@@ -114,11 +127,13 @@ local function apply_browser_series_badge()
             --    this one sits at bottom-right of the same cover frame.
             local corner_mark_size = (_uv_fn and _uv_fn("corner_mark_size"))
                 or Screen:scaleBySize(20)
-            local eff_size = math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+            local eff_size = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+                * get_badge_scale())
             local cover_left   = x + math.floor((self.width - target.dimen.w) / 2)
             local cover_right  = cover_left + target.dimen.w
-            local cover_bottom = y + self.height
-                - math.floor((self.height - target.dimen.h) / 2)
+            -- Use absolute coords so cover_bottom stays correct when a title strip
+            -- below the cover inflates self.height beyond the actual image area.
+            local cover_bottom = target.dimen.y + target.dimen.h
 
             -- 6. Format series index: integer → "#N", float → "#N.N"
             local idx_str
@@ -128,11 +143,11 @@ local function apply_browser_series_badge()
                 idx_str = "#" .. string.format("%.1f", series_idx)
             end
 
-            -- Fixed circle radius — never grows with label length.
-            local r      = math.max(math.floor(eff_size * 0.38), Screen:scaleBySize(10))
-            local margin = math.floor(eff_size * 0.3)
-            local cx = cover_right  - r - margin
-            local cy = cover_bottom - r - margin
+            -- Radius matches favorites badge: eff_size / 2.
+            local r     = math.floor(eff_size / 2)
+            local inset = utils.getBadgeInset(r)
+            local cx = cover_right  - r - inset
+            local cy = cover_bottom - r - inset
 
             -- Usable text width inside the circle (conservative inner chord).
             local inner_w  = math.floor(r * 1.30)

@@ -21,6 +21,7 @@ local function apply_browser_cover_badges()
     local ReadCollection = require("readcollection")
     local Screen         = require("device").screen
     local TextWidget     = require("ui/widget/textwidget")
+    local utils          = require("common/utils")
     local _              = require("gettext")
 
     -- Capture plugin reference while __ZEN_UI_PLUGIN is still set.
@@ -205,11 +206,33 @@ local function apply_browser_cover_badges()
             return fav_mark
         end
 
+        local _cached_badge_scale    = 1.0
+        local _cached_badge_size_key = false
+        local function get_badge_scale()
+            local cur = _plugin and type(_plugin.config) == "table"
+                and type(_plugin.config.browser_cover_badges) == "table"
+                and _plugin.config.browser_cover_badges.badge_size or false
+            if cur ~= _cached_badge_size_key then
+                _cached_badge_size_key = cur
+                _cached_badge_scale    = utils.getBadgeScale(_plugin and _plugin.config)
+            end
+            return _cached_badge_scale
+        end
+        local _badges_log_done = false
+        local _badges_target_log_done = false
         function MosaicMenuItem:paintTo(bb, x, y)
             -- Clear the full cell to white before painting so that portrait
             -- covers (which are narrower than the cell) don't leave ghost pixels
             -- from a previously painted full-width placeholder in the margins.
             if self.width and self.height then
+                if not _badges_log_done then
+                    _badges_log_done = true
+                    local logger = require("logger")
+                    logger.dbg("zen-ui:browser_cover_badges:paintTo: white fill x=", x, "y=", y,
+                        "w=", self.width, "h=", self.height,
+                        "strip_patched=", tostring(MosaicMenuItem._zen_title_strip_patched),
+                        "is_directory=", tostring(self.is_directory))
+                end
                 bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_WHITE)
             end
 
@@ -225,12 +248,28 @@ local function apply_browser_cover_badges()
 
             -- Resolve inner cover-frame sub-widget and current mark size
             local target = self[1] and self[1][1] and self[1][1][1]
-            if not (target and target.dimen and target.dimen.y) then return end
+            if not (target and target.dimen and target.dimen.y) then
+                local logger = require("logger")
+                logger.dbg("zen-ui:browser_cover_badges:paintTo: target not found, self[1]=",
+                    tostring(self[1] ~= nil), "self[1][1]=", tostring(self[1] and self[1][1] ~= nil),
+                    "self[1][1][1]=", tostring(self[1] and self[1][1] and self[1][1][1] ~= nil))
+                return
+            end
+            do
+                if not _badges_target_log_done then
+                    _badges_target_log_done = true
+                    local logger = require("logger")
+                    logger.dbg("zen-ui:browser_cover_badges:paintTo: target.dimen x=", target.dimen.x,
+                        "y=", target.dimen.y, "w=", target.dimen.w, "h=", target.dimen.h,
+                        "self.height=", self.height, "self.width=", self.width)
+                end
+            end
 
             local corner_mark_size = uv("corner_mark_size")
             if not (corner_mark_size and corner_mark_size > 0) then return end
 
             local border = target.bordersize or 0
+            local _badge_scale = get_badge_scale()
 
             -- 3. Favorite star → top-left inside a circle
             local show_fav_badge = _plugin
@@ -242,19 +281,20 @@ local function apply_browser_cover_badges()
                 and self.menu.name ~= "collections"
                 and ReadCollection:isFileInCollections(self.filepath, true)
             then
-                local eff_corner = math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+                local eff_corner = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14)) * _badge_scale)
                 local r      = math.floor(eff_corner / 2)
-                local margin = math.floor(eff_corner * 0.3)
+                -- Center on the 45-deg diagonal from the corner.
+                local inset = utils.getBadgeInset(r)
                 local cx, cy
                 if BD.mirroredUILayout() then
                     local cover_right = x + self.width
                         - math.ceil((self.width - target.dimen.w) / 2)
-                    cx = cover_right - r - margin
+                    cx = cover_right - border - r - inset
                 else
                     local cover_left = x + math.floor((self.width - target.dimen.w) / 2)
-                    cx = cover_left + r + margin
+                    cx = cover_left + border + r + inset
                 end
-                cy = target.dimen.y + r + margin
+                cy = target.dimen.y + border + r + inset
                 -- Border ring then fill (same two-call pattern as series badge)
                 paintCircle(bb, cx, cy, r + 2, Blitbuffer.COLOR_BLACK)
                 paintCircle(bb, cx, cy, r,     Blitbuffer.COLOR_LIGHT_GRAY)
@@ -308,7 +348,7 @@ local function apply_browser_cover_badges()
                 local do_pct   = not do_check and not do_pause and self.percent_finished ~= nil
 
                 if do_check or do_pause or do_pct then
-                    local eff_size = math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+                    local eff_size = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14)) * _badge_scale)
                     local bw = math.floor(eff_size * 1.2)
                     local bh = math.floor(eff_size * 1.1)
 
@@ -410,7 +450,7 @@ local function apply_browser_cover_badges()
                     and self.status ~= "complete"
                     and self.status ~= "abandoned"
                 if is_new then
-                    local eff_size   = math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14))
+                    local eff_size   = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14)) * _badge_scale)
                     local span       = math.floor(eff_size * 2.5)
                     local band_thick = math.floor(span * 0.35)
                     -- Font tied to cover size, not band thickness, so it stays small regardless of ribbon scale

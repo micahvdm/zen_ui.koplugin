@@ -1,10 +1,12 @@
 -- common/i18n.lua — Zen UI
--- Loads the plugin's own .po translation for the current KOReader language
--- and wraps package.loaded["gettext"] so all subsequent require("gettext")
--- calls in every plugin module receive the override automatically.
+-- Injects the plugin's .po translations directly into KOReader's GetText
+-- tables so every code path (including modules that captured `local _ =
+-- require("gettext")` before the plugin loaded) sees both KOReader's and
+-- Zen UI's translations.  Also patches GetText_mt.__index.changeLang so
+-- translations are re-injected whenever the user switches languages.
 --
--- USAGE: call i18n.install() as the FIRST statement in main.lua, before any
--- other require().  Call i18n.uninstall() in ZenUI:onCloseWidget / teardown.
+-- USAGE: call i18n.install() early in main.lua (before menus are built).
+-- Call i18n.uninstall() in ZenUI:onCloseWidget / teardown.
 
 local logger = require("logger")
 
@@ -89,11 +91,10 @@ local function detectLang()
 end
 
 -- ---------------------------------------------------------------------------
--- Load the best-matching .po file for the current language
+-- Load .po translations for a given language string
 -- ---------------------------------------------------------------------------
-local function loadTranslations()
-    local lang = detectLang()
-    if lang == "en" or lang:match("^en_") then return nil, nil end
+local function loadTranslationsForLang(lang)
+    if not lang or lang == "en" or lang:match("^en_") then return nil, nil end
 
     local function try(name)
         local path = _dir .. "../locales/" .. name .. ".po"
@@ -102,86 +103,110 @@ local function loadTranslations()
             logger.info("zen-ui i18n: loaded " .. path .. " — " .. n .. " entries")
             return t, c
         end
+        logger.warn("zen-ui i18n: no translations in " .. path)
+        return nil, nil
     end
 
     local t, c = try(lang)
     if t then return t, c end
 
-    -- fallback: try language prefix only (e.g. "pt" for "pt_BR")
+    -- fallback: language prefix only (e.g. "pt" for "pt_BR")
     local prefix = lang:match("^([a-zA-Z]+)")
     if prefix and prefix ~= lang then
+        logger.warn("zen-ui i18n: falling back from " .. lang .. " to " .. prefix)
         return try(prefix)
+    end
+    logger.warn("zen-ui i18n: no .po file found for lang=" .. lang)
+    return nil, nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Inject Zen UI translations into the live GetText tables.
+-- Called at startup and again after every changeLang().
+-- ---------------------------------------------------------------------------
+local function applyZenTranslations(GetText, lang)
+    local translations, contexts = loadTranslationsForLang(lang)
+    if not translations then
+        logger.warn("zen-ui i18n: skipping injection — no translations for lang=" .. (lang or "nil"))
+        return
+    end
+    for msgid, msgstr in pairs(translations) do
+        GetText.translation[msgid] = msgstr
+    end
+    for msgctxt, msgs in pairs(contexts or {}) do
+        if not GetText.context[msgctxt] then
+            GetText.context[msgctxt] = {}
+        end
+        for msgid, msgstr in pairs(msgs) do
+            GetText.context[msgctxt][msgid] = msgstr
+        end
     end
 end
 
 -- ---------------------------------------------------------------------------
 -- install / uninstall
 -- ---------------------------------------------------------------------------
-local _installed    = false
-local _orig_gettext = nil
+local _installed       = false
+local _orig_gettext    = nil
+local _orig_changeLang = nil
 
 local function install()
     if _installed then return end
 
-    local translations, contexts = loadTranslations()
-    if not translations then return end  -- English or unsupported language
-
-    -- Ensure gettext is in package.loaded before we wrap it
-    local orig = package.loaded["gettext"]
-    if not orig then
+    local GetText = package.loaded["gettext"]
+    if not GetText then
         local ok, gt = pcall(require, "gettext")
         if not ok or not gt then
             logger.warn("zen-ui i18n: cannot load gettext — translations disabled")
             return
         end
-        orig = gt
+        GetText = gt
     end
-    _orig_gettext = orig
+    _orig_gettext = GetText
 
-    local wrapper
-    local mt = getmetatable(orig)
-    if mt and mt.__call then
-        -- gettext is a callable table (the normal KOReader case)
-        wrapper = setmetatable({}, {
-            __call = function(_, msgid)
-                local t = translations[msgid]
-                if t then return t end
-                return orig(msgid)
-            end,
-            __index = function(_, key)
-                -- pgettext: function(msgctxt, msgid)
-                if key == "pgettext" then
-                    return function(msgctxt, msgid)
-                        local t = contexts[msgctxt] and contexts[msgctxt][msgid]
-                        if t then return t end
-                        return orig.pgettext(msgctxt, msgid)
-                    end
-                end
-                -- ngettext, npgettext, etc. — delegate to original
-                return orig[key]
-            end,
-        })
-    elseif type(orig) == "function" then
-        wrapper = function(msgid)
-            local t = translations[msgid]
-            if t then return t end
-            return orig(msgid)
+    -- Inject translations for the current language
+    applyZenTranslations(GetText, detectLang())
+
+    -- Patch changeLang so we re-inject after every language switch.
+    -- GetText_mt.__index is the method table; we replace changeLang in-place.
+    local mt = getmetatable(GetText)
+    if mt and type(mt.__index) == "table" then
+        local mt_index = mt.__index
+        _orig_changeLang = mt_index.changeLang
+        mt_index.changeLang = function(new_lang)
+            local result = _orig_changeLang(new_lang)
+            if result == false then
+                logger.warn("zen-ui i18n: changeLang failed for lang=" .. (new_lang or "nil"))
+            end
+            applyZenTranslations(GetText, new_lang)
+            return result
         end
     else
-        logger.warn("zen-ui i18n: unexpected gettext type: " .. type(orig))
-        return
+        logger.warn("zen-ui i18n: cannot patch changeLang — unexpected gettext metatable shape")
     end
 
-    package.loaded["gettext"] = wrapper
     _installed = true
-    logger.info("zen-ui i18n: installed wrapper for lang=" .. detectLang())
+    logger.info("zen-ui i18n: installed for lang=" .. (detectLang() or "?"))
 end
 
 local function uninstall()
     if not _installed then return end
-    package.loaded["gettext"] = _orig_gettext
-    _orig_gettext = nil
-    _installed    = false
+    if _orig_gettext and _orig_changeLang then
+        local mt = getmetatable(_orig_gettext)
+        if mt and type(mt.__index) == "table" then
+            -- Restore original changeLang first
+            mt.__index.changeLang = _orig_changeLang
+            -- Reload clean KOReader translations without Zen UI overlay
+            _orig_changeLang(_orig_gettext.current_lang)
+        else
+            logger.warn("zen-ui i18n: uninstall — cannot restore changeLang, metatable changed")
+        end
+    else
+        logger.warn("zen-ui i18n: uninstall — missing saved state, may be partially installed")
+    end
+    _orig_changeLang = nil
+    _orig_gettext    = nil
+    _installed       = false
     logger.info("zen-ui i18n: uninstalled")
 end
 

@@ -44,9 +44,10 @@ local function apply_browser_list_item_layout()
         local ListMenu = require("listmenu")
         local ListMenuItem = get_upvalue(ListMenu._updateItemsBuildUI, "ListMenuItem")
         if not ListMenuItem then return end
+        if ListMenuItem._zen_bll_patched then return end
 
-        local BookInfoManager = get_upvalue(ListMenuItem.update, "BookInfoManager")
-        if not BookInfoManager then return end
+        local ok_bim, BookInfoManager = pcall(require, "bookinfomanager")
+        if not ok_bim then return end
 
         -- ── Corner-mask helpers (reused in paintTo) ───────────────────────────
         local corner_radius = Screen:scaleBySize(8)
@@ -106,8 +107,9 @@ local function apply_browser_list_item_layout()
             local underline_h = 1 -- matches self.underline_h in ListMenuItem:init()
             local dimen_h = self.height - 2 * underline_h
             local border_size = Size.border.thin
+            local cover_v_pad = Screen:scaleBySize(4)  -- top+bottom breathing room
             local cover_zone_w = dimen_h  -- squared, identical to stock list mode
-            local max_img = dimen_h - 2 * border_size
+            local max_img = dimen_h - 2 * border_size - 2 * cover_v_pad
             -- Standard portrait width (2:3) so every cover frame is the same size
             local cover_w = math.floor(max_img * 2 / 3)
 
@@ -409,12 +411,10 @@ local function apply_browser_list_item_layout()
             -- We probe its natural width first so that wright_w (and therefore
             -- main_w) accounts for it — titles will truncate before the page
             -- count text is clipped.
+            -- Page count always shown in list-detailed mode; show_page_count setting
+            -- only gates the mosaic pill badge (browser_page_count.lua).
             local wright_pages
-            local _p = _plugin_ref or rawget(_G, "__ZEN_UI_PLUGIN")
-            local show_page_count = _p
-                and type(_p.config.browser_page_count) == "table"
-                and _p.config.browser_page_count.show_page_count == true
-            if show_page_count and pages and pages > 0 and not self.do_filename_only then
+            if pages and pages > 0 and not self.do_filename_only then
                 local pages_probe = TextWidget:new{
                     text    = zen_utils.formatPageCount(pages, true),
                     face    = Font:getFace("cfont", math.max(7, fs_right - 2)),
@@ -591,6 +591,7 @@ local function apply_browser_list_item_layout()
                 end
             end
         end
+        ListMenuItem._zen_bll_patched = true
     end
 
     -- ── Remove list separator lines ────────────────────────────────────────
@@ -648,18 +649,19 @@ local function apply_browser_list_item_layout()
         -- so any captured static reference goes stale. Dynamic dispatch (below) handles it.
     end
 
-    -- Hook FileManager:setupLayout so we run after coverbrowser has been
-    -- instantiated (same pattern as browser_folder_cover).
+    -- Apply immediately: at plugin init time listmenu may already be loaded by CoverBrowser.
+    -- This ensures BLL is active before History/Collections views are first shown,
+    -- and avoids the fragile FileManager.setupLayout timing race.
+    patchListMenu()
+
+    -- Hook FileManager:setupLayout as a safety-net fallback (e.g., listmenu loads later
+    -- or we return from the reader and layout is re-run). patchListMenu() is idempotent.
     local FileManager = require("apps/filemanager/filemanager")
     local orig_fm_setupLayout = FileManager.setupLayout
-    local patched = false
 
     FileManager.setupLayout = function(self)
         orig_fm_setupLayout(self)
-        if not patched and self.coverbrowser then
-            patchListMenu()
-            patched = true
-        end
+        patchListMenu()
         -- Set (or re-set) an instance wrapper that calls FileChooser.updateItems at
         -- dispatch time rather than capturing it at wrap time.  CoverBrowser swaps
         -- FileChooser.updateItems on every classic<->cover mode toggle, so a static

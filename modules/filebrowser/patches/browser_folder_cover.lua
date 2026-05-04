@@ -26,6 +26,8 @@ local function apply_browser_folder_cover()
     local VerticalSpan = require("ui/widget/verticalspan")
     local lfs = require("libs/libkoreader-lfs")
     local util = require("util")
+    local paths = require("common/paths")
+    local utils = require("common/utils")
 
     local _ = require("gettext")
     local Screen = Device.screen
@@ -368,8 +370,28 @@ local function apply_browser_folder_cover()
         -- Captured once at setupLayout time; uv reads corner_mark_size live.
         local _badge_uv_fn = find_uv_fn(MosaicMenuItem.paintTo)
 
+        local _cached_badge_scale    = 1.0
+        local _cached_badge_size_key = false
+        local function get_badge_scale()
+            local cur = _plugin and type(_plugin.config) == "table"
+                and type(_plugin.config.browser_cover_badges) == "table"
+                and _plugin.config.browser_cover_badges.badge_size or false
+            if cur ~= _cached_badge_size_key then
+                _cached_badge_size_key = cur
+                _cached_badge_scale    = utils.getBadgeScale(_plugin and _plugin.config)
+            end
+            return _cached_badge_scale
+        end
+        local _folder_paintTo_logged = false
         local orig_folder_paintTo = MosaicMenuItem.paintTo
         function MosaicMenuItem:paintTo(bb, x, y)
+            if not _folder_paintTo_logged and self.is_directory then
+                _folder_paintTo_logged = true
+                local logger = require("logger")
+                logger.dbg("zen-ui:browser_folder_cover:paintTo: self.height=", self.height,
+                    "self.width=", self.width, "_zen_cover_dimen=", tostring(rawget(self, "_zen_cover_dimen")),
+                    "_zen_title_strip_patched=", tostring(MosaicMenuItem._zen_title_strip_patched))
+            end
             orig_folder_paintTo(self, bb, x, y)
             local count = rawget(self, "_zen_folder_count")
             if not count then return end
@@ -379,11 +401,13 @@ local function apply_browser_folder_cover()
             if not (cd and cd.w and cd.w > 0) then return end
             local corner_mark_size = (_badge_uv_fn and _badge_uv_fn("corner_mark_size"))
                 or Screen:scaleBySize(20)
-            local eff_size = math.max(corner_mark_size, math.floor((cd.w or 0) * 0.14))
+            local eff_size = math.floor(math.max(corner_mark_size, math.floor((cd.w or 0) * 0.14))
+                * get_badge_scale())
 
-            -- Cover is centered within the cell (same math as _setFolderCover).
-            local cover_x = x + math.floor((self.width  - cd.w) / 2)
-            local cover_y = y + math.floor((self.height - cd.h) / 2)
+            -- Use the cached centered_top (computed when self.height = cover-area height).
+            -- Re-deriving from self.height would be wrong when mosaic_title_strip inflates it.
+            local cover_x = x + math.floor((self.width - cd.w) / 2)
+            local cover_y = y + (rawget(self, "_zen_cover_top") or math.floor((self.height - cd.h) / 2))
 
             local count_str  = tostring(count)
             local font_size  = math.max(7, math.floor(eff_size * 0.24))
@@ -396,12 +420,11 @@ local function apply_browser_folder_cover()
                 padding = 0,
             }
             local tw_sz = tw:getSize()
-            local diam   = math.max(tw_sz.w, tw_sz.h) + math.floor(eff_size * 0.3)
-            local r      = math.floor(diam / 2)
-            local margin = math.floor(eff_size * 0.3)
-            -- top-right of cover frame
-            local cx = cover_x + cd.w - r - margin
-            local cy = cover_y + r + margin
+            local diam  = math.max(tw_sz.w, tw_sz.h) + math.floor(eff_size * 0.3)
+            local r     = math.floor(diam / 2)
+            local inset = utils.getBadgeInset(r)
+            local cx = cover_x + cd.w - r - inset
+            local cy = cover_y + r + inset
 
             paintCircle(bb, cx, cy, r + 2, _BlitBadge.COLOR_BLACK)
             paintCircle(bb, cx, cy, r,     _BlitBadge.COLOR_LIGHT_GRAY)
@@ -424,10 +447,10 @@ local function apply_browser_folder_cover()
             if bi then return bi, path end
 
             local basename = ffiUtil.basename(path)
-            local home_dir = G_reader_settings and G_reader_settings:readSetting("home_dir") or nil
+            local home_dir = paths.getHomeDir()
 
             -- Search ancestor dirs only within home_dir.
-            if not home_dir or path:sub(1, #home_dir) ~= home_dir then
+            if not home_dir or not paths.isInHomeDir(path) then
                 return nil, nil
             end
 
@@ -878,7 +901,14 @@ local function apply_browser_folder_cover()
             -- approach used in browser_cover_mosaic_uniform.lua.
             local border      = Folder.face.border_size  -- Size.border.thin
             local max_w       = self.width  - 2 * border
-            local bh          = self.height - 2 * border
+            -- When title strip is active and _setFolderCover is called from a standalone
+            -- update() (deferred refresh), self.height has been restored to full size by
+            -- mosaic_title_strip.update. During init, mosaic_title_strip.init already
+            -- reduced self.height, so no further adjustment is needed (_zen_in_init=true).
+            local strip_h = (not MosaicMenuItem._zen_in_init)
+                and (rawget(MosaicMenuItem, "_zen_strip_h") or 0) or 0
+            local eff_h   = self.height - strip_h
+            local bh          = eff_h - 2 * border
             local available_h = bh
             local portrait_w, portrait_h
             if available_h * 2 <= max_w * 3 then
@@ -993,12 +1023,17 @@ local function apply_browser_folder_cover()
             -- Cover geometry is stored on self so the paintTo wrapper can position
             -- the badge correctly without walking the widget tree at paint time.
             self._zen_cover_dimen = dimen
+            -- centered_top is computed against eff_h (usable area, strip excluded) so
+            -- the badge lands on the cover image rather than inside the strip.
+            self._zen_cover_top = math.floor((eff_h - dimen.h) / 2)
             self._zen_folder_count = (settings.show_item_count.get() and img.book_count and img.book_count > 0)
                 and img.book_count or nil
             local directory = self:_getTextBoxes { w = size.w, h = size.h }
 
             local folder_name_widget
-            if settings.show_folder_name.get() then
+            -- When the title strip is active it renders the folder name below
+            -- the cover; suppress the on-cover overlay to avoid duplication.
+            if settings.show_folder_name.get() and not MosaicMenuItem._zen_title_strip_patched then
                 local NameContainer = settings.name_centered.get() and CenterContainer or BottomContainer
                 local name_frame = FrameContainer:new {
                     padding = 0,
@@ -1028,7 +1063,7 @@ local function apply_browser_folder_cover()
             --   the left of the cover, mirroring list mode.
             -- In both cases the line closer to the cover is longer; the outer one is
             -- shorter.  Rounded corners inset the lines on both sides.
-            local centered_top  = math.floor((self.height - dimen.h) / 2)
+            local centered_top  = math.floor((eff_h - dimen.h) / 2)
             local top_h         = 2 * (Folder.edge.thick + Folder.edge.margin)
             local spine_gap     = Screen:scaleBySize(9)
             local use_top_lines = centered_top >= top_h
@@ -1073,12 +1108,14 @@ local function apply_browser_folder_cover()
                 local spine_x   = math.max(0, math.floor((self.width - dimen.w) / 2))
                 local line1_h   = math.max(0, math.floor(dimen.h * (Folder.edge.width ^ 2)) - 2 * line_inset)
                 local line2_h   = math.max(0, math.floor(dimen.h * Folder.edge.width)       - 2 * line_inset)
+                -- Use eff_h so spine lines center within the cover area, not the full
+                -- cell (which includes the strip region when called via deferred refresh).
                 decoration_layer = LeftContainer:new {
-                    dimen = { w = self.width, h = self.height },
+                    dimen = { w = self.width, h = eff_h },
                     HorizontalGroup:new {
                         HorizontalSpan:new { width = math.max(0, spine_x - spine_gap) },
                         CenterContainer:new {
-                            dimen = { w = Folder.edge.thick, h = self.height },
+                            dimen = { w = Folder.edge.thick, h = eff_h },
                             LineWidget:new {
                                 background = Folder.edge.color,
                                 dimen = { w = Folder.edge.thick, h = line1_h },
@@ -1086,7 +1123,7 @@ local function apply_browser_folder_cover()
                         },
                         HorizontalSpan:new { width = Folder.edge.margin },
                         CenterContainer:new {
-                            dimen = { w = Folder.edge.thick, h = self.height },
+                            dimen = { w = Folder.edge.thick, h = eff_h },
                             LineWidget:new {
                                 background = Folder.edge.color,
                                 dimen = { w = Folder.edge.thick, h = line2_h },
@@ -1273,9 +1310,10 @@ local function apply_browser_folder_cover()
                 function ListMenuItem:_setListFolderCover(img)
                     local underline_h = 1 -- same as self.underline_h = 1 set in ListMenuItem:init()
                     local border_size = Size.border.thin
+                    local cover_v_pad = Screen:scaleBySize(4)  -- matches bll top+bottom padding
                     local dimen_h = self.height - 2 * underline_h
                     local cover_zone_w = dimen_h -- squared, matches book cover zone in list mode
-                    local max_img = dimen_h - 2 * border_size
+                    local max_img = dimen_h - 2 * border_size - 2 * cover_v_pad
 
                     -- Font sizes scaled to item height, matching ListMenuItem's _fontSize formula.
                     local scale_by_size = Screen:scaleBySize(1000000) * (1 / 1000000)
