@@ -57,6 +57,7 @@ local function apply_navbar()
             books = true,
             manga = true,
             news = true,
+            bible = true,
             continue = true,
             history = false,
             favorites = false,
@@ -156,6 +157,11 @@ local function apply_navbar()
             id = "news",
             label = _("News"),
             icon = "tab_news",
+        },
+        {
+            id = "bible",
+            label = _("Bible"),
+            icon = "bible",
         },
         {
             id = "continue",
@@ -343,6 +349,13 @@ local function apply_navbar()
         end
     end
 
+    local function onTabBible()
+        local fm = FileManager.instance
+        if zen_plugin and zen_plugin.bible_mode then
+            zen_plugin.bible_mode:openTranslation()
+        end
+    end
+
     local function onTabContinue()
         local last_file = G_reader_settings:readSetting("lastfile")
         if not last_file or lfs.attributes(last_file, "mode") ~= "file" then
@@ -473,6 +486,7 @@ local function apply_navbar()
         books = onTabBooks,
         manga = onTabManga,
         news = onTabNews,
+        bible = onTabBible,
         continue = onTabContinue,
         history = onTabHistory,
         favorites = onTabFavorites,
@@ -738,8 +752,13 @@ local function apply_navbar()
 
     local function getVisibleTabs()
         local visible = {}
+        local features = zen_plugin.config and zen_plugin.config.features
         for _, id in ipairs(config.tab_order) do
-            if (id == "books" or config.show_tabs[id]) and tabs_by_id[id] then
+            local show = (id == "books" or config.show_tabs[id])
+            if id == "bible" and not (type(features) == "table" and features.bible_mode ~= false) then
+                show = false
+            end
+            if show and tabs_by_id[id] then
                 table.insert(visible, tabs_by_id[id])
                 if #visible >= navbar_max_tabs then break end
             end
@@ -924,7 +943,7 @@ local function apply_navbar()
             if track_tab and tapped_id ~= active_tab then
                 active_tab = tapped_id
                 -- Only repaint the FM navbar for tabs that render inside it (not overlay views)
-                local stays_in_browser = tapped_id == "books"
+                local stays_in_browser = tapped_id == "books" or tapped_id == "bible"
                     or (tapped_id == "manga" and config.manga_action == "folder" and config.manga_folder ~= "")
                     or (tapped_id == "news" and config.news_action == "folder" and config.news_folder ~= "")
                     or tapped_id:sub(1, 3) == "ct_"
@@ -1602,7 +1621,7 @@ local function apply_navbar()
     -- The FM is about to be destroyed; we persist {tab, page} so that when
     -- showFileManager() recreates it we can scroll back to the right place.
     local skip_tabs_for_state = {
-        books = true, manga = true, news = true,
+        books = true, manga = true, news = true, bible = true,
         continue = true, search = true, stats = true, exit = true,
     }
     local orig_fm_onShowingReader = FileManager.onShowingReader

@@ -13,6 +13,7 @@ local M = {}
 
 function M.build(ctx)
     local config        = ctx.config
+    local plugin        = ctx.plugin
     local save_and_apply = ctx.save_and_apply
     local apply_feature  = ctx.apply_feature
 
@@ -64,6 +65,7 @@ function M.build(ctx)
         { id = "books",       text = _("Books")         },
         { id = "manga",       text = _("Manga")         },
         { id = "news",        text = _("News")          },
+        { id = "bible",       text = _("Bible")         },
         { id = "continue",    text = _("Continue")      },
         { id = "history",     text = _("History")       },
         { id = "favorites",   text = _("Favorites")     },
@@ -645,6 +647,47 @@ function M.build(ctx)
                                 },
                             },
                         },
+                    },
+                    {
+                        text_func = function()
+                            local trans = config.bible_mode and config.bible_mode.last_translation or "ESV"
+                            return _("Bible translation: ") .. trans
+                        end,
+                        separator = true,
+                        show_func = function() return plugin.bible_mode ~= nil end,
+                        sub_item_table_func = function()
+                            return plugin.bible_mode:getMenuItems()
+                        end,
+                    },
+                    {
+                        text = _("Visibility"),
+                        sub_item_table = navbar_tab_toggle_items,
+                    },
+                    {
+                        text = _("Arrange tabs"),
+                        keep_menu_open = true,
+                        callback = function()
+                            local SortWidget = require("ui/widget/sortwidget")
+                            local sort_items = {}
+                            for _, tab in ipairs(navbar_tab_items) do
+                                local is_visible = tab.id == "books" or config.navbar.show_tabs[tab.id] == true
+                                table.insert(sort_items, {
+                                    text = tab.text,
+                                    orig_item = tab.id,
+                                    dim = not is_visible,
+                                })
+                            end
+                            UIManager:show(SortWidget:new{
+                                title = _("Arrange navbar tabs"),
+                                item_table = sort_items,
+                                callback = function()
+                                    for i, item in ipairs(sort_items) do
+                                        config.navbar.tab_order[i] = item.orig_item
+                                    end
+                                    save_and_apply_navbar()
+                                end,
+                            })
+                        end,
                     },
                 },
             },
