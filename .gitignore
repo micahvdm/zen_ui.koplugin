@@ -2,3 +2,5 @@ dist
 .DS_Store
 *.md
 bibles
+___pycache___
+*.pyc

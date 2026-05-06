@@ -127,6 +127,17 @@ Browse your favorite OPDS sources with the same clean, consistent interface you'
 | **Android** | `sdcard/koreader/plugins/` |
 | **Desktop (Linux/macOS)** | `/koreader/plugins/` |
 
+## Migrating from Project Title
+
+If you previously used [Project Title](https://github.com/joshuacant/ProjectTitle), you must disable or remove it before using Zen UI. Both plugins patch the Cover Browser, and having both active at the same time will cause conflicts.
+
+Choose one of the following:
+
+- **Remove it** — Delete the `projecttitle.koplugin` folder from your KOReader plugins directory.
+- **Disable it** — Rename the folder to `projecttitle.koplugin.disabled`. KOReader will ignore it on next launch.
+
+After disabling or removing Project Title, restart KOReader and Zen UI will load cleanly.
+
 ## Localization
 
 Zen UI is currently translated into:

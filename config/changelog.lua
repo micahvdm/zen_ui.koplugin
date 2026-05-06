@@ -39,4 +39,18 @@ return {
         "Support for non touchscreen devices",
         "Bug fixes and performance improvements",
     },
+    ["1.2.0"] = {
+        "Add Tags to Navbar (Settings > Navbar)",
+        "Add custom tabs to Navbar (Settings > Navbar)",
+        "Add filtering for all views",
+        "Add dim finished books (Library > Covers)",
+        "Add/remove from collections via context menu",
+        "Add a toggle for folder stack spines (Library > Folders)",
+        "Allow remove from history in context menu",
+        "Better support for multiple home folders",
+        "Up folder fixes and styling",
+        "Fixed lag in folder/path chooser",
+        "Fixed reader menu not opening on some devices",
+        "Bug fixes and performance improvements",
+    },
 }

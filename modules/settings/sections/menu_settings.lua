@@ -120,7 +120,7 @@ function M.build(ctx)
     local quick_button_sub_items = {}
 
     table.insert(quick_button_sub_items, {
-        text = _("Arrange buttons"),
+        text = _("Order") .. " \u{25B8}",
         keep_menu_open = true,
         callback = function()
             local SortWidget = require("ui/widget/sortwidget")

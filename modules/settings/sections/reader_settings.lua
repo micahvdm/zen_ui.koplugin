@@ -470,6 +470,27 @@ function M.build(ctx)
             ui.view.footer:addToMainMenu(mock)
             local result = {}
             table.insert(result, font_submenu)
+            table.insert(result, {
+                text = _("Hide in CBZ/PDF files"),
+                checked_func = function()
+                    return type(config.reader_footer) == "table"
+                        and config.reader_footer.hide_in_cbz == true
+                end,
+                callback = function()
+                    if type(config.reader_footer) ~= "table" then
+                        config.reader_footer = {}
+                    end
+                    config.reader_footer.hide_in_cbz =
+                        not (config.reader_footer.hide_in_cbz == true)
+                    plugin:saveConfig()
+                    -- Apply immediately to the current open document.
+                    local footer = ui and ui.view and ui.view.footer
+                    if footer then
+                        footer:applyFooterMode()
+                        footer:refreshFooter(true, true)
+                    end
+                end,
+            })
             if mock.status_bar and mock.status_bar.sub_item_table then
                 for _, item in ipairs(mock.status_bar.sub_item_table) do
                     table.insert(result, item)

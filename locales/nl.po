@@ -6,8 +6,6 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Language: nl\n"
 
-
-
 msgid "%1 (%2)"
 msgstr "%1 (%2)"
 
@@ -20,6 +18,9 @@ msgstr "%1 min resterend in hoofdstuk"
 msgid "%d%% Read"
 msgstr "%d%% gelezen"
 
+msgid "(auto)"
+msgstr "(auto)"
+
 msgid "1 author"
 msgstr "1 auteur"
 
@@ -31,6 +32,9 @@ msgstr "1 min resterend in hoofdstuk"
 
 msgid "1 series"
 msgstr "1 reeks"
+
+msgid "1 tag"
+msgstr "1 label"
 
 msgid "12-hour  (3:30 PM)"
 msgstr "12 uur  (3:30 PM)"
@@ -56,6 +60,12 @@ msgstr "Een eenvoudige tabbladenbalk onderaan je bibliotheek.\nVolledig aanpasba
 msgid "About"
 msgstr "Over"
 
+msgid "Action: %1"
+msgstr "Actie: %1"
+
+msgid "Action: (none)"
+msgstr "Actie: (geen)"
+
 msgid "Active tab color"
 msgstr "Kleur actief tabblad"
 
@@ -74,14 +84,29 @@ msgstr "Onderstreping actief tabblad"
 msgid "Add catalog"
 msgstr "Catalogus toevoegen"
 
-msgid "Add to favorites"
-msgstr "Toevoegen aan favorieten"
+msgid "Add custom button"
+msgstr "Aangepaste knop toevoegen"
+
+msgid "Add folder…"
+msgstr "Map toevoegen…"
+
+msgid "Add to collection"
+msgstr "Toevoegen aan collectie"
+
+msgid "added"
+msgstr "toegevoegd"
+
+msgid "Additional home folders"
+msgstr "Extra thuismappen"
 
 msgid "Advanced"
 msgstr "Geavanceerd"
 
 msgid "Alexandre Dumas"
 msgstr "Alexandre Dumas"
+
+msgid "All"
+msgstr "Alles"
 
 msgid "All settings in one unified tab.\nCheck for and install Zen UI updates directly from your e-reader."
 msgstr "Alle instellingen in één gecombineerd tabblad.\nZoek en installeer Zen UI-updates rechtstreeks op je e-reader."
@@ -118,9 +143,6 @@ msgstr "Weet u zeker dat u KOReader wilt herstarten?"
 
 msgid "Arrange"
 msgstr "Ordenen"
-
-msgid "Arrange buttons"
-msgstr "Knoppen ordenen"
 
 msgid "Arrange center items"
 msgstr "Middelste items ordenen"
@@ -164,11 +186,23 @@ msgstr "gem. tijd/boek"
 msgid "avg time/day"
 msgstr "gem. tijd/dag"
 
+msgid "Badge size"
+msgstr "Badge-grootte"
+
+msgid "Badges"
+msgstr "Badges"
+
 msgid "Bar"
 msgstr "Balk"
 
 msgid "Battery"
 msgstr "Batterij"
+
+msgid "Battery Stats"
+msgstr "Batterijstatistieken"
+
+msgid "Beginning / End"
+msgstr "Begin / Einde"
 
 msgid "best day"
 msgstr "beste dag"
@@ -203,8 +237,8 @@ msgstr "Boek toegevoegd aan downloadlijst"
 msgid "Book cover - black background"
 msgstr "Boekomslag — zwarte achtergrond"
 
-msgid "Book cover - black background"
-msgstr "Boekomslag — zwarte achtergrond"
+msgid "Book information"
+msgstr "Boekinformatie"
 
 msgid "Book Status"
 msgstr "Boekstatus"
@@ -257,14 +291,14 @@ msgstr "Opsommingsteken"
 msgid "Buttons"
 msgstr "Knoppen"
 
-msgid "Cal. Search"
-msgstr "Cal. zoeken"
-
 msgid "Calendar"
 msgstr "Kalender"
 
 msgid "Calibre"
 msgstr "Calibre"
+
+msgid "Calibre plugin is not installed."
+msgstr "De Calibre-plugin is niet geïnstalleerd."
 
 msgid "Calibre Search"
 msgstr "Calibre zoeken"
@@ -274,6 +308,9 @@ msgstr "Annuleren"
 
 msgid "Cannot open last document"
 msgstr "Kan het laatste document niet openen"
+
+msgid "Casual Chess"
+msgstr "Casual schaken"
 
 msgid "Center"
 msgstr "Midden"
@@ -298,6 +335,9 @@ msgstr "Controleren op updates"
 
 msgid "Checking for updates…"
 msgstr "Controleren op updates…"
+
+msgid "Chess"
+msgstr "Schaken"
 
 msgid "Choose a different folder"
 msgstr "Een andere map kiezen"
@@ -341,8 +381,14 @@ msgstr "Gekleurde statuspictogrammen"
 msgid "Columns"
 msgstr "Kolommen"
 
+msgid "Compact"
+msgstr "Compact"
+
 msgid "Connect folders"
 msgstr "Mappen koppelen"
+
+msgid "Connections"
+msgstr "Verbindingen"
 
 msgid "Context Menu"
 msgstr "Contextmenu"
@@ -350,9 +396,11 @@ msgstr "Contextmenu"
 msgid "Continue"
 msgstr "Doorgaan"
 
-msgctxt "File"
 msgid "Copy"
 msgstr "Kopiëren"
+
+msgid "Could not reach update server. Check your internet connection."
+msgstr "Kan de updateserver niet bereiken. Controleer je internetverbinding."
 
 msgid "CoverBrowser plugin is not enabled, some features will not work correctly."
 msgstr "De CoverBrowser-plugin is niet ingeschakeld, sommige functies werken niet correct."
@@ -369,11 +417,23 @@ msgstr "Maak map aan en gebruik als startmap"
 msgid "Crop folder custom image"
 msgstr "Aangepaste mapafbeelding bijsnijden"
 
+msgid "Crossword"
+msgstr "Kruiswoord"
+
 msgid "Current home folder:"
 msgstr "Huidige startmap:"
 
+msgid "Current only"
+msgstr "Alleen huidig"
+
 msgid "Custom"
 msgstr "Aangepast"
+
+msgid "Custom button label"
+msgstr "Label voor aangepaste knop"
+
+msgid "Custom buttons"
+msgstr "Aangepaste knoppen"
 
 msgid "Custom RGB"
 msgstr "Aangepaste RGB"
@@ -438,6 +498,9 @@ msgstr "standaard"
 msgid "Delete"
 msgstr "Verwijderen"
 
+msgid "Delete collection"
+msgstr "Collectie verwijderen"
+
 msgid "Delete OPDS catalog?"
 msgstr "OPDS-catalogus verwijderen?"
 
@@ -450,9 +513,6 @@ msgstr "Aflopend"
 msgid "Description"
 msgstr "Beschrijving"
 
-msgid "Description:"
-msgstr "Beschrijving:"
-
 msgid "Detailed list with cover images and filenames"
 msgstr "Gedetailleerde lijst met omslagen en bestandsnamen"
 
@@ -462,11 +522,17 @@ msgstr "Gedetailleerde lijst met omslagen en metagegevens"
 msgid "Detailed list with metadata, no images"
 msgstr "Gedetailleerde lijst met metagegevens, zonder afbeeldingen"
 
+msgid "Details"
+msgstr "Details"
+
 msgid "Device: "
 msgstr "Apparaat: "
 
 msgid "Dictionary lookup"
 msgstr "Woordenboek opzoeken"
+
+msgid "Dim finished books"
+msgstr "Vervaag voltooide boeken"
 
 msgid "Disable bottom menu swipe"
 msgstr "Onderste menuveegbeweging uitschakelen"
@@ -549,6 +615,9 @@ msgstr "Voer je GitHub-gebruikersnaam in om vermeld te worden in de issue"
 msgid "Exit"
 msgstr "Afsluiten"
 
+msgid "Extra large"
+msgstr "Extra groot"
+
 msgid "Extract and cache book metadata and cover images for books in the current directory. Requires CoverBrowser plugin."
 msgstr "Metagegevens en omslagen van boeken in de huidige map extraheren en cachen. Vereist de CoverBrowser-plugin."
 
@@ -578,6 +647,12 @@ msgstr "Bestandsbeheer"
 
 msgid "Filebrowser plugin is not installed."
 msgstr "De Filebrowser-plugin is niet geïnstalleerd."
+
+msgid "Filter"
+msgstr "Filteren"
+
+msgid "Filter by status"
+msgstr "Filteren op status"
 
 msgid "Finished"
 msgstr "Klaar"
@@ -642,11 +717,17 @@ msgstr "GitHub-gebruikersnaam (optioneel)"
 msgid "Global"
 msgstr "Globaal"
 
+msgid "Go"
+msgstr "Ga"
+
+msgid "Go to page"
+msgstr "Ga naar pagina"
+
 msgid "Green"
 msgstr "Groen"
 
-msgid "Hide finished books"
-msgstr "Voltooide boeken verbergen"
+msgid "Hide in CBZ/PDF files"
+msgstr "Verbergen in CBZ/PDF-bestanden"
 
 msgid "Hide list borders"
 msgstr "Lijstranden verbergen"
@@ -660,6 +741,9 @@ msgstr "Markeren / Opzoeken"
 msgid "History"
 msgstr "Geschiedenis"
 
+msgid "Hold to skip"
+msgstr "Vasthouden om te overslaan"
+
 msgid "Home"
 msgstr "Startpagina"
 
@@ -671,6 +755,9 @@ msgstr "Startmap"
 
 msgid "Hour"
 msgstr "Uur"
+
+msgid "Icon: %1"
+msgstr "Pictogram: %1"
 
 msgid "Incompatible plugins have been disabled:"
 msgstr "Incompatibele plugins zijn uitgeschakeld:"
@@ -693,11 +780,17 @@ msgstr "Trefwoorden"
 msgid "KOReader: "
 msgstr "KOReader: "
 
+msgid "Label: %1"
+msgstr "Label: %1"
+
 msgid "Landscape mosaic mode"
 msgstr "Liggend mozaïekmodus"
 
 msgid "Landscape mosaic: "
 msgstr "Liggend mozaïek: "
+
+msgid "Large"
+msgstr "Groot"
 
 msgid "last read date"
 msgstr "datum laatste lezing"
@@ -707,6 +800,9 @@ msgstr "Later"
 
 msgid "latest"
 msgstr "nieuwste"
+
+msgid "Leave empty to use action title"
+msgstr "Leeg laten om actietitel te gebruiken"
 
 msgid "Left"
 msgstr "Links"
@@ -729,11 +825,11 @@ msgstr "Lijst (gedetailleerd)"
 msgid "List - detailed titles and metadata"
 msgstr "Lijst — gedetailleerde titels en metadata"
 
-msgid "List - detailed titles and metadata"
-msgstr "Lijst — gedetailleerde titels en metadata"
-
 msgid "List: "
 msgstr "Lijst: "
+
+msgid "LocalSend"
+msgstr "LocalSend"
 
 msgid "Lock home folder"
 msgstr "Startmap vergrendelen"
@@ -756,9 +852,6 @@ msgstr "Mangamap niet gevonden: "
 msgid "Manga tab action: "
 msgstr "Actie manga-tabblad: "
 
-msgid "Manual"
-msgstr "Handmatig"
-
 msgid "Menu"
 msgstr "Menu"
 
@@ -774,6 +867,9 @@ msgstr "Minuut"
 msgid "Mosaic"
 msgstr "Mozaiëk"
 
+msgid "Mosaic - large cover thumbnails"
+msgstr "Mozaiëk — grote omslagminiaturen"
+
 msgid "Mosaic and detailed list settings"
 msgstr "Instellingen mozaïek en gedetailleerde lijst"
 
@@ -782,12 +878,6 @@ msgstr "Mozaïek met omslagen"
 
 msgid "Mosaic with text"
 msgstr "Mozaïek met tekst"
-
-msgid "Mosaic - large cover thumbnails"
-msgstr "Mozaïek — grote omslagminiaturen"
-
-msgid "Mosaic - large cover thumbnails"
-msgstr "Mozaiëk — grote omslagminiaturen"
 
 msgid "Move"
 msgstr "Verplaatsen"
@@ -885,6 +975,9 @@ msgstr "Nachtwarmte: "
 msgid "No books found"
 msgstr "Geen boeken gevonden"
 
+msgid "No description."
+msgstr "Geen beschrijving."
+
 msgid "No network connection. Please connect to Wi-Fi and try again."
 msgstr "Geen netwerkverbinding. Maak verbinding met Wi-Fi en probeer opnieuw."
 
@@ -896,6 +989,12 @@ msgstr "Geen scheidingsteken"
 
 msgid "No update asset found."
 msgstr "Geen updatebestand gevonden."
+
+msgid "Normal"
+msgstr "Normaal"
+
+msgid "Nothing"
+msgstr "Niets"
 
 msgid "Notion"
 msgstr "Notion"
@@ -933,20 +1032,21 @@ msgstr "Openen"
 msgid "Order"
 msgstr "Volgorde"
 
-msgctxt "page_count"
-msgid "p."
-msgstr "p."
-
 msgid "Page Browser"
 msgstr "Paginabrowser"
+
+msgid "Page number"
+msgstr "Paginanummer"
+
+msgid "Page number format"
+msgstr "Paginanummerformaat"
 
 msgid "Page stream"
 msgstr "Paginastroom"
 
-msgid "pages"
-msgstr "pagina's"
+msgid "Page x / y"
+msgstr "Pagina x / y"
 
-msgctxt "page_count_long"
 msgid "pages"
 msgstr "pag."
 
@@ -962,7 +1062,6 @@ msgstr "pagina's vandaag"
 msgid "Partial pages refresh"
 msgstr "Gedeeltelijke paginaverversing"
 
-msgctxt "File"
 msgid "Paste"
 msgstr "Plakken"
 
@@ -977,6 +1076,9 @@ msgstr "percentage - niet geopend als laatste"
 
 msgid "Personal Records"
 msgstr "Persoonlijke records"
+
+msgid "Please delete the Project: Title plugin from your plugins folder and restart KOReader."
+msgstr "Verwijder de Project: Title-plugin uit je pluginsmap en herstart KOReader."
 
 msgid "Plugin management"
 msgstr "Pluginbeheer"
@@ -1007,6 +1109,9 @@ msgstr "Vorige pagina"
 
 msgid "Progress"
 msgstr "Voortgang"
+
+msgid "Project: Title is not compatible with Zen UI."
+msgstr "Project: Title is niet compatibel met Zen UI."
 
 msgid "Puzzle"
 msgstr "Puzzel"
@@ -1086,8 +1191,17 @@ msgstr "Verwijderen"
 msgid "Remove default"
 msgstr "Standaard verwijderen"
 
-msgid "Remove from favorites"
-msgstr "Verwijderen uit favorieten"
+msgid "Remove from collection"
+msgstr "Verwijderen uit collectie"
+
+msgid "Remove from history"
+msgstr "Verwijderen uit geschiedenis"
+
+msgid "Remove this button"
+msgstr "Deze knop verwijderen"
+
+msgid "Remove this folder from additional home folders?"
+msgstr "Deze map verwijderen uit de extra thuismappen?"
 
 msgid "Rename"
 msgstr "Hernoemen"
@@ -1140,14 +1254,17 @@ msgstr "RSS-lezer"
 msgid "RSS Reader plugin is not installed."
 msgstr "De RSS Reader-plugin is niet geïnstalleerd."
 
-msgid "Run Zen UI update now?\n\nIf this plugin is a git checkout, Zen UI will run a fast-forward pull and then ask for restart."
-msgstr "Zen UI-update nu uitvoeren?\n\nAls deze plugin een git-checkout is, voert Zen UI een fast-forward pull uit en vraagt daarna om herstart."
-
 msgid "Save"
 msgstr "Opslaan"
 
 msgid "Save current settings as preset"
 msgstr "Huidige instellingen opslaan als voorinstelling"
+
+msgid "Screenshot"
+msgstr "Schermafbeelding"
+
+msgid "Screenshot saved to:"
+msgstr "Schermafbeelding opgeslagen in:"
 
 msgid "Scroll bar style"
 msgstr "Stijl schuifbalk"
@@ -1166,6 +1283,12 @@ msgstr "Zoekresultaten"
 
 msgid "Select"
 msgstr "Selecteren"
+
+msgid "Select icon"
+msgstr "Pictogram selecteren"
+
+msgid "Send with LocalSend"
+msgstr "Versturen met LocalSend"
 
 msgid "Separator: "
 msgstr "Scheidingsteken: "
@@ -1187,6 +1310,9 @@ msgstr "Alle gebaren instellen op doorvoer? De rechterbovenhoek in de lezer blij
 
 msgid "Set as default"
 msgstr "Als standaard instellen"
+
+msgid "Set as wallpaper"
+msgstr "Instellen als achtergrond"
 
 msgid "Set file types to sync"
 msgstr "Bestandstypen instellen voor synchronisatie"
@@ -1212,6 +1338,9 @@ msgstr "Short Oxford English"
 msgid "Short Oxford English (26 MB)"
 msgstr "Short Oxford English (26 MB)"
 
+msgid "Show author below cover (mosaic)"
+msgstr "Show author below cover (mosaic)"
+
 msgid "Show bottom border"
 msgstr "Onderste rand weergeven"
 
@@ -1233,6 +1362,9 @@ msgstr "Mapnaam op omslag weergeven"
 msgid "Show hidden files"
 msgstr "Verborgen bestanden weergeven"
 
+msgid "Show in quick settings"
+msgstr "Weergeven in snelle instellingen"
+
 msgid "Show item count on folder covers"
 msgstr "Aantal items op mapcovers weergeven"
 
@@ -1247,12 +1379,6 @@ msgstr "Labels weergeven"
 
 msgid "Show new banner"
 msgstr "Show new banner"
-
-msgid "Show author below cover (mosaic)"
-msgstr "Show author below cover (mosaic)"
-
-msgid "Show title below cover (mosaic)"
-msgstr "Show title below cover (mosaic)"
 
 msgid "Show other items"
 msgstr "Overige items weergeven"
@@ -1269,6 +1395,12 @@ msgstr "Voortgang % op mozaïekomslagen weergeven"
 msgid "Show series number on covers"
 msgstr "Serienummer weergeven op omslagen"
 
+msgid "Show spine lines on folder covers"
+msgstr "Ruglijnen op mapomslagen weergeven"
+
+msgid "Show title below cover (mosaic)"
+msgstr "Show title below cover (mosaic)"
+
 msgid "Show top border"
 msgstr "Bovenste rand weergeven"
 
@@ -1283,6 +1415,12 @@ msgstr "grootte"
 
 msgid "Skip"
 msgstr "Overslaan"
+
+msgid "Skip 10 pages"
+msgstr "10 pagina's overslaan"
+
+msgid "Skip 20 pages"
+msgstr "20 pagina's overslaan"
 
 msgid "Sleep"
 msgstr "Slaapstand"
@@ -1307,9 +1445,6 @@ msgstr "Sorteren op"
 
 msgid "Sort by: "
 msgstr "Sorteren op: "
-
-msgid "Sort collection by"
-msgstr "Collectie sorteren op"
 
 msgid "Sort folder"
 msgstr "Map sorteren"
@@ -1356,6 +1491,9 @@ msgstr "Statusbalk"
 msgid "Status Bar"
 msgstr "Statusbalk"
 
+msgid "Steps to reproduce, expected vs. actual behavior"
+msgstr "Stappen om te reproduceren, verwacht vs. werkelijk gedrag"
+
 msgid "Streak"
 msgstr "Reeks"
 
@@ -1385,6 +1523,12 @@ msgstr "Alle catalogi synchroniseren"
 
 msgid "Tabs"
 msgstr "Tabbladen"
+
+msgid "Tags"
+msgstr "Labels"
+
+msgid "tags"
+msgstr "labels"
 
 msgid "Tap and hold any book or folder in your library to reveal details."
 msgstr "Houd een boek of map in je bibliotheek aangetikt om details te tonen."
@@ -1476,11 +1620,11 @@ msgstr "Status bijwerken"
 msgid "Updated to %1"
 msgstr "Bijgewerkt naar %1"
 
-msgid "Updating…"
-msgstr "Bijwerken…"
-
 msgid "Updates"
 msgstr "Updates"
+
+msgid "Updating…"
+msgstr "Bijwerken…"
 
 msgid "USB"
 msgstr "USB"
@@ -1505,6 +1649,9 @@ msgstr "Gedetailleerde tijd tot einde hoofdstuk"
 
 msgid "Vertical bar"
 msgstr "Verticale balk"
+
+msgid "View"
+msgstr "Weergave"
 
 msgid "Visibility"
 msgstr "Zichtbaarheid"
@@ -1551,9 +1698,6 @@ msgstr "Zen markeermenu"
 msgid "Zen icon - white background"
 msgstr "Zen-pictogram — witte achtergrond"
 
-msgid "Zen icon - white background"
-msgstr "Zen-pictogram — witte achtergrond"
-
 msgid "Zen Mode"
 msgstr "Zen-modus"
 
@@ -1577,4 +1721,3 @@ msgstr "Zen UI is up-to-date."
 
 msgid "Zen UI: "
 msgstr "Zen UI: "
-

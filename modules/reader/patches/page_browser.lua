@@ -204,8 +204,50 @@ local function apply_page_browser()
             end
 
             local function open_reader_menu()
+                local ui_ref = pbw_ref.ui
+                if not (ui_ref and ui_ref.config) then
+                    logger.warn("zen PBW open_reader_menu: ui.config missing")
+                    pbw_ref:onClose()
+                    return
+                end
+                local cfg = ui_ref.config
+                -- Close PBW first so it is off the stack before the dialog appears.
                 pbw_ref:onClose()
-                pbw_ref.ui:handleEvent(Event:new("ShowConfigMenu"))
+                UIManager:nextTick(function()
+                    if cfg.config_dialog then return end -- already open
+                    local ok, err = pcall(function()
+                        local ConfigDialog = require("ui/widget/configdialog")
+                        -- Forward-declare so the close_callback closure captures it
+                        -- as a proper upvalue (in Lua, local x = expr puts x in
+                        -- scope only AFTER the statement, so the closure would see
+                        -- a global 'dialog' (nil) if we used a single statement).
+                        local dialog
+                        dialog = ConfigDialog:new{
+                            document        = cfg.document,
+                            ui              = cfg.ui,
+                            configurable    = cfg.configurable,
+                            config_options  = cfg.options,
+                            is_always_active = true,
+                            covers_footer   = true,
+                            close_callback  = function()
+                                cfg.last_panel_index = dialog.panel_index or cfg.last_panel_index
+                                cfg.config_dialog = nil
+                                ui_ref:handleEvent(Event:new("RestoreHinting"))
+                            end,
+                        }
+                        cfg.config_dialog = dialog
+                        if ui_ref.highlight then
+                            ui_ref.highlight:onStopHighlightIndicator(true)
+                        end
+                        ui_ref:handleEvent(Event:new("DisableHinting"))
+                        dialog:onShowConfigPanel(cfg.last_panel_index)
+                        UIManager:show(dialog)
+                    end)
+                    if not ok then
+                        logger.err("zen PBW open_reader_menu: failed to open config dialog:", err)
+                        cfg.config_dialog = nil
+                    end
+                end)
             end
 
             -- Vocab Builder: show button only if plugin is active and icon resolves.

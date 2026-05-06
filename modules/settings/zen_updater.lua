@@ -3,9 +3,9 @@
 -- release.zip asset, unpacks it in-place, and prompts for a KOReader restart.
 
 local _ = require("gettext")
+local json = require("json")
 local logger = require("logger")
 
-local GITHUB_API_URL      = "https://api.github.com/repos/AnthonyGress/zen_ui.koplugin/releases/latest"
 local GITHUB_RELEASES_URL = "https://api.github.com/repos/AnthonyGress/zen_ui.koplugin/releases"
 
 -- Resolve the plugin root directory from this file's own path so the module
@@ -15,57 +15,86 @@ local PLUGIN_ROOT = require("common/plugin_root")
 local M = {}
 
 -- Cached result (populated on first check_for_update call).
-M._checked    = false
-M._has_update = false
-M._latest_ver = nil   -- latest version string without leading "v"
-M._dl_url     = nil   -- download URL for release.zip
+M._checked          = false
+M._has_update       = false
+M._latest_ver       = nil   -- latest version string without leading "v"
+M._dl_url           = nil   -- download URL for release.zip
+M._banner_loaded    = false -- true after init_banner() has run
+M._wakeup_timer     = nil   -- pending UIManager scheduled function (for unschedule)
+M._check_cancelled  = false -- set to true by cancel_wakeup_check to abort mid-poll
 
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
 
 --- Parse major/minor/patch integers from version strings like "v1.2.3",
---- "1.2.3", or "1.2.3-beta1". Pre-release suffixes are stripped so that
---- "1.2.3-beta1" compares numerically equal to "1.2.3" (stable wins ties).
+--- "1.2.3", or "1.2.3-beta1". Returns nums + a boolean for pre-release so
+--- that stable "1.2.3" compares greater than "1.2.3-beta1".
 local function parse_semver(v)
     v = (v or ""):match("^v?(.+)$") or ""
-    v = v:match("^([%d%.]+)") or ""  -- strip -prerelease / +build suffixes
-    local maj, min, pat = v:match("^(%d+)%.(%d+)%.?(%d*)$")
-    return tonumber(maj) or 0, tonumber(min) or 0, tonumber(pat) or 0
+    local base = v:match("^([%d%.]+)") or ""
+    local is_pre = v:find("[-+]") ~= nil
+    local maj, min, pat = base:match("^(%d+)%.(%d+)%.?(%d*)$")
+    return tonumber(maj) or 0, tonumber(min) or 0, tonumber(pat) or 0, is_pre
 end
 
 --- Returns true when version string a is strictly greater than b.
+--- Stable "1.2.3" > pre-release "1.2.3-beta1" per semver precedence rules.
 local function semver_gt(a, b)
-    local a1, a2, a3 = parse_semver(a)
-    local b1, b2, b3 = parse_semver(b)
+    local a1, a2, a3, a_pre = parse_semver(a)
+    local b1, b2, b3, b_pre = parse_semver(b)
     if a1 ~= b1 then return a1 > b1 end
     if a2 ~= b2 then return a2 > b2 end
-    return a3 > b3
+    if a3 ~= b3 then return a3 > b3 end
+    -- same numbers: stable beats pre-release
+    if a_pre ~= b_pre then return not a_pre end
+    return false
 end
 
 --- Read the current plugin version from _meta.lua.
 local function get_current_version()
-    if PLUGIN_ROOT then
-        local ok, meta = pcall(dofile, PLUGIN_ROOT .. "/_meta.lua")
-        if ok and type(meta) == "table" and meta.version then
-            return meta.version
-        end
-    end
-    local ok, meta = pcall(require, "_meta")
+    local ok, meta = pcall(dofile, PLUGIN_ROOT .. "/_meta.lua")
     if ok and type(meta) == "table" and meta.version then
         return meta.version
     end
     return "0.0.0"
 end
 
---- Extract a string field value from a GitHub API JSON response.
---- Handles simple cases only (no nested depth needed for the fields we use).
-local function json_str(json, key)
-    return json:match('"' .. key .. '"%s*:%s*"([^"]*)"')
+--- Get the zen_ui.koplugin.zip download URL from a decoded release object.
+local function get_asset_url(release)
+    if not release or type(release.assets) ~= "table" then return nil end
+    for _i, asset in ipairs(release.assets) do
+        if asset.name == "zen_ui.koplugin.zip" then
+            return asset.browser_download_url
+        end
+    end
+end
+
+--- Decode a releases list JSON body and return stable/beta tag+url.
+local function parse_release_list(body)
+    local ok, releases = pcall(json.decode, body)
+    if not ok or type(releases) ~= "table" then
+        logger.warn("ZenUpdater: JSON decode failed")
+        return nil
+    end
+    local stable_tag, stable_url, beta_tag, beta_url
+    for _i, release in ipairs(releases) do
+        if not stable_tag and not release.prerelease then
+            stable_tag = release.tag_name
+            stable_url = get_asset_url(release)
+        end
+        if not beta_tag and release.prerelease then
+            beta_tag = release.tag_name
+            beta_url = get_asset_url(release)
+        end
+        if stable_tag and beta_tag then break end
+    end
+    return stable_tag, stable_url, beta_tag, beta_url
 end
 
 --- Best-effort HTTPS GET; returns the response body string or nil.
---- Uses ssl.https (LuaSec, bundled with KOReader).
+--- Uses ssl.https (LuaSec, bundled with KOReader). Blocking -- use only
+--- for user-initiated checks.
 local function https_get(url)
     local ok_ssl, https = pcall(require, "ssl.https")
     local ok_ltn, ltn12 = pcall(require, "ltn12")
@@ -82,32 +111,18 @@ local function https_get(url)
             headers = { ["User-Agent"] = "zen_ui.koplugin" },
             sink    = ltn12.sink.table(body),
         }
-        logger.dbg("ZenUpdater: HTTP response code", code)
+        -- code can be a string error message on Kobo (e.g. "connection refused")
         if code ~= 200 then
+            logger.warn("ZenUpdater: https_get non-200:", tostring(code))
             body = nil
         end
     end)
     if not ok_req then
-        logger.warn("ZenUpdater: https_get failed:", req_err)
+        logger.warn("ZenUpdater: https_get error:", req_err)
         return nil
     end
     if not body then return nil end
     return table.concat(body)
-end
-
---- Find the browser_download_url for the asset named "zen_ui.koplugin.zip" inside the
---- GitHub releases API JSON body. Returns nil if not found.
-local function extract_asset_url(json)
-    local assets = json:match('"assets"%s*:%s*(%b[])')
-    if assets then
-        for obj in assets:gmatch('%b{}') do
-            if obj:find('"zen_ui%.koplugin%.zip"') then
-                local url = json_str(obj, "browser_download_url")
-                if url then return url end
-            end
-        end
-    end
-    return nil
 end
 
 --- Returns true only for a proper release asset download URL.
@@ -167,7 +182,11 @@ end
 -- Public API
 -- ---------------------------------------------------------------------------
 
-local CHECK_INTERVAL = 24 * 3600  -- seconds between automatic checks
+local CHECK_INTERVAL        = 24 * 3600  -- seconds between automatic checks
+local NET_SETTLE_DELAY      = 15         -- seconds after resume before first network attempt
+local NET_RETRY_DELAY       = 2 * 60    -- seconds to wait before retrying when no network
+local NET_ERROR_BASE_DELAY  = 30         -- first retry delay (s) after API failure; doubles each retry
+local NET_ERROR_MAX_RETRIES = 2          -- max error retries: 30s, 60s
 local GS_KEY_TIME    = "zen_ui_last_update_check"
 local GS_KEY_AVAIL   = "zen_ui_update_available"
 local GS_KEY_VER     = "zen_ui_latest_version"
@@ -178,6 +197,18 @@ local GS_KEY_CHANNEL = "zen_ui_update_channel"
 local function get_gs()
     local ok, gs = pcall(function() return G_reader_settings end)
     return (ok and gs) or nil
+end
+
+--- Returns true when the 24h check interval has elapsed since the last check.
+local function is_check_due()
+    local gs  = get_gs()
+    local now = os.time()
+    local last = gs and gs:readSetting(GS_KEY_TIME) or 0
+    local last_num = type(last) == "number" and last or 0
+    local delta = now - last_num
+    local due = delta >= CHECK_INTERVAL
+    logger.info("ZenUpdater: is_check_due last=", last_num, "now=", now, "delta=", delta, "due=", tostring(due))
+    return due
 end
 
 local function get_channel()
@@ -234,57 +265,26 @@ local function do_network_check()
     local channel = get_channel()
     local current = get_current_version()
     logger.dbg("ZenUpdater: do_network_check channel=", channel, "current=", current)
+
+    local body = https_get(GITHUB_RELEASES_URL .. "?per_page=10")
+    if not body then
+        logger.warn("ZenUpdater: no response from releases API")
+        return false
+    end
+
+    local stable_tag, stable_url, beta_tag, beta_url = parse_release_list(body)
+    logger.dbg("ZenUpdater: stable=", stable_tag, "beta=", beta_tag)
+
     local tag, dl_url
-
-    if channel == "beta" then
-        -- Fetch latest stable and latest prerelease; use whichever is newer.
-        -- Stable wins when versions are equal.
-        local stable_tag, stable_url
-        local stable_body = https_get(GITHUB_API_URL)
-        if stable_body then
-            stable_tag = json_str(stable_body, "tag_name")
-            stable_url = extract_asset_url(stable_body)
-        end
-        logger.dbg("ZenUpdater: stable_tag=", stable_tag, "asset_url=", stable_url)
-
-        local beta_tag, beta_url
-        local list_body = https_get(GITHUB_RELEASES_URL .. "?per_page=10")
-        if list_body then
-            for obj in list_body:gmatch('%b{}') do
-                if obj:find('"prerelease"%s*:%s*true') then
-                    beta_tag = json_str(obj, "tag_name")
-                    if beta_tag then
-                        beta_url = extract_asset_url(obj)
-                        break
-                    end
-                end
-            end
-        end
-        logger.dbg("ZenUpdater: beta_tag=", beta_tag, "asset_url=", beta_url)
-
-        -- Prefer beta only when strictly newer than stable.
-        if beta_tag and semver_gt(beta_tag, stable_tag or "0.0.0") then
-            logger.dbg("ZenUpdater: using beta (newer than stable)")
-            tag    = beta_tag
-            dl_url = beta_url
-        elseif stable_tag then
-            logger.dbg("ZenUpdater: using stable (beta not strictly newer)")
-            tag    = stable_tag
-            dl_url = stable_url
-        else
-            logger.dbg("ZenUpdater: no stable found, falling back to beta")
-            tag    = beta_tag
-            dl_url = beta_url
-        end
+    if channel == "beta" and beta_tag and semver_gt(beta_tag, stable_tag or "0.0.0") then
+        tag    = beta_tag
+        dl_url = beta_url
+    elseif stable_tag then
+        tag    = stable_tag
+        dl_url = stable_url
     else
-        local body = https_get(GITHUB_API_URL)
-        if not body then
-            logger.warn("ZenUpdater: no response from releases/latest")
-            return false
-        end
-        tag    = json_str(body, "tag_name")
-        dl_url = extract_asset_url(body)
-        logger.dbg("ZenUpdater: stable tag=", tag, "asset_url=", dl_url)
+        tag    = beta_tag
+        dl_url = beta_url
     end
 
     if not tag then
@@ -298,12 +298,113 @@ local function do_network_check()
     return true
 end
 
+--- Load persisted banner state once per session; never makes network calls.
+--- Called from zen_settings.lua so the update banner appears from cached data.
+function M.init_banner()
+    if M._banner_loaded then return end
+    M._banner_loaded = true
+    load_cached_state()
+end
+
+--- Cancel any pending background wakeup check.
+function M.cancel_wakeup_check()
+    M._check_cancelled = true
+    local ok_um, UIManager = pcall(require, "ui/uimanager")
+    if ok_um and UIManager and M._wakeup_timer then
+        UIManager:unschedule(M._wakeup_timer)
+    end
+    M._wakeup_timer = nil
+    logger.dbg("ZenUpdater: wakeup check cancelled")
+end
+
+--- Schedule a background update check on device resume.
+--- Waits NET_SETTLE_DELAY seconds for the network to reconnect, then runs a
+--- blocking HTTPS check inside a UIManager timer (not on the resume handler itself).
+--- If no network, retries once after NET_RETRY_DELAY, then gives up.
+--- If network is up but the API call fails, retries with exponential backoff
+--- (NET_ERROR_BASE_DELAY doubling each attempt, up to NET_ERROR_MAX_RETRIES).
+--- Cancelled on suspend so nothing fires while asleep.
+function M.schedule_wakeup_check()
+    logger.info("ZenUpdater: schedule_wakeup_check called")
+    M.cancel_wakeup_check()  -- reset on every resume
+    M._check_cancelled = false
+    if not is_check_due() then
+        logger.info("ZenUpdater: background check skipped, within 24h window")
+        return
+    end
+
+    local ok_um, UIManager = pcall(require, "ui/uimanager")
+    if not ok_um or not UIManager then
+        logger.warn("ZenUpdater: UIManager not available, aborting")
+        return
+    end
+
+    local function has_network()
+        local ok_nm, NetworkMgr = pcall(require, "ui/network/manager")
+        return ok_nm and NetworkMgr and NetworkMgr:isWifiOn()
+    end
+
+    -- Run the network check; on failure retry with exponential backoff.
+    local function run_check_with_retry(retry_count, error_delay)
+        if M._check_cancelled then return end
+        logger.info("ZenUpdater: starting background network check")
+        if do_network_check() then
+            persist_state(os.time())
+            M._banner_loaded = true
+            logger.info("ZenUpdater: background check done, has_update=", tostring(M._has_update))
+        elseif retry_count < NET_ERROR_MAX_RETRIES then
+            logger.warn("ZenUpdater: check failed, retry", retry_count + 1, "of", NET_ERROR_MAX_RETRIES, "in", error_delay, "s")
+            local next_count = retry_count + 1
+            local next_delay = error_delay * 2
+            local function error_retry()
+                M._wakeup_timer = nil
+                run_check_with_retry(next_count, next_delay)
+            end
+            M._wakeup_timer = error_retry
+            UIManager:scheduleIn(error_delay, error_retry)
+        else
+            logger.warn("ZenUpdater: background check failed after", NET_ERROR_MAX_RETRIES, "retries, giving up")
+        end
+    end
+
+    -- Deferred so the HTTPS call never blocks the onResume/init handler directly.
+    local function attempt()
+        M._wakeup_timer = nil
+        if M._check_cancelled then return end
+        local net_up = has_network()
+        logger.info("ZenUpdater: attempt fired, network=", tostring(net_up))
+        if not net_up then
+            -- No network after settle delay -- retry once after NET_RETRY_DELAY.
+            logger.info("ZenUpdater: no network, scheduling retry in ", NET_RETRY_DELAY, "s")
+            local function retry_check()
+                M._wakeup_timer = nil
+                if M._check_cancelled then return end
+                local retry_net = has_network()
+                logger.info("ZenUpdater: retry fired, network=", tostring(retry_net))
+                if not retry_net then
+                    logger.info("ZenUpdater: retry: still no network, giving up")
+                    return
+                end
+                run_check_with_retry(0, NET_ERROR_BASE_DELAY)
+            end
+            M._wakeup_timer = retry_check
+            UIManager:scheduleIn(NET_RETRY_DELAY, retry_check)
+            return
+        end
+        run_check_with_retry(0, NET_ERROR_BASE_DELAY)
+    end
+
+    M._wakeup_timer = attempt
+    UIManager:scheduleIn(NET_SETTLE_DELAY, attempt)
+    logger.info("ZenUpdater: wakeup check scheduled in ", NET_SETTLE_DELAY, "s")
+end
+
 --- Check for updates at most once every 24 h (throttled via G_reader_settings).
---- Silently falls back to the last cached result when offline or throttled.
+--- Returns "ok" (live check succeeded), "error" (network failure), or "cached" (throttled).
 function M.check_for_update()
     if M._checked then
         logger.dbg("ZenUpdater: already checked this session, skipping")
-        return
+        return "cached"
     end
     M._checked = true
 
@@ -316,17 +417,18 @@ function M.check_for_update()
         logger.dbg("ZenUpdater: within throttle window, loading cached state")
         load_cached_state()
         logger.dbg("ZenUpdater: cached has_update=", tostring(M._has_update), "latest=", tostring(M._latest_ver))
-        return
+        return "cached"
     end
 
     -- Attempt a live check; if it fails, fall back to cached state.
     if not do_network_check() then
         logger.warn("ZenUpdater: live check failed, loading cached state")
         load_cached_state()
-        return
+        return "error"
     end
 
     persist_state(now)
+    return "ok"
 end
 
 --- Returns true when a newer release has been detected.
@@ -418,7 +520,12 @@ end
 --- Download the latest release.zip, unpack it over the plugin directory, and
 --- prompt the user to restart KOReader.
 function M.run_update(plugin)
-    _show_update_screen_and_install(plugin)
+    local ok_nm, NetworkMgr = pcall(require, "ui/network/manager")
+    if ok_nm and NetworkMgr and not NetworkMgr:isWifiOn() then
+        NetworkMgr:runWhenOnline(function() _show_update_screen_and_install(plugin) end)
+    else
+        _show_update_screen_and_install(plugin)
+    end
 end
 
 --- Returns a menu item for the top of the Zen UI settings page when an update
@@ -450,8 +557,9 @@ function M.build_update_now_item(plugin)
         end,
         keep_menu_open = true,
         callback = function()
-            local UIManager = require("ui/uimanager")
-            local ZenScreen = require("common/zen_screen")
+            local UIManager  = require("ui/uimanager")
+            local ZenScreen  = require("common/zen_screen")
+            local ok_nm, NetworkMgr = pcall(require, "ui/network/manager")
 
             -- Reset throttle so this check always goes to the network.
             M._checked    = false
@@ -464,30 +572,44 @@ function M.build_update_now_item(plugin)
                 pcall(gs.flush, gs)
             end
 
-            local screen
-            screen = ZenScreen:new{
-                subtitle    = _("Checking for updates…"),
-                button      = false,
-                dismissable = false,
-            }
-            UIManager:show(screen)
-            UIManager:forceRePaint()
+            local function run_check()
+                local screen
+                screen = ZenScreen:new{
+                    subtitle    = _("Checking for updates…"),
+                    button      = false,
+                    dismissable = false,
+                }
+                UIManager:show(screen)
+                UIManager:forceRePaint()
 
-            UIManager:scheduleIn(0.1, function()
-                M.check_for_update()
+                UIManager:scheduleIn(0.1, function()
+                    local status = M.check_for_update()
 
-                if M._has_update then
-                    screen:update{ dismissable = true }
-                    UIManager:close(screen)
-                    _show_update_screen_and_install(plugin)
-                else
-                    screen:update{
-                        subtitle    = _("Zen UI is up to date."),
-                        button      = _("OK"),
-                        dismissable = true,
-                    }
-                end
-            end)
+                    if status == "error" then
+                        screen:update{
+                            subtitle    = _("Could not reach update server. Check your internet connection."),
+                            button      = _("OK"),
+                            dismissable = true,
+                        }
+                    elseif M._has_update then
+                        screen:update{ dismissable = true }
+                        UIManager:close(screen)
+                        _show_update_screen_and_install(plugin)
+                    else
+                        screen:update{
+                            subtitle    = _("Zen UI is up to date."),
+                            button      = _("OK"),
+                            dismissable = true,
+                        }
+                    end
+                end)
+            end
+
+            if ok_nm and NetworkMgr and not NetworkMgr:isWifiOn() then
+                NetworkMgr:runWhenOnline(run_check)
+            else
+                run_check()
+            end
         end,
     }
 end

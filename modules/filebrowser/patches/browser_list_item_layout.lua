@@ -95,7 +95,86 @@ local function apply_browser_list_item_layout()
 
             local is_dir = not (self.entry.is_file or self.entry.file)
             if is_dir then
-                return original_update(self)
+                if not self.entry.is_go_up then
+                    return original_update(self)
+                end
+                -- Render the up-folder row with the same cover-zone and rounded-
+                -- corners treatment as other list items, but with a plain folder
+                -- placeholder and "⬆ ../" as the title.
+                do
+                    local underline_h = 1
+                    local dimen_h     = self.height - 2 * underline_h
+                    local border_size = Size.border.thin
+                    local cover_v_pad = Screen:scaleBySize(4)
+                    local cover_zone_w = dimen_h
+                    local max_img  = dimen_h - 2 * border_size - 2 * cover_v_pad
+                    local cover_w  = math.floor(max_img * 2 / 3)
+
+                    local function _fontSize(nominal, max_size)
+                        local fs = math.floor(nominal * dimen_h * (1 / 64) / scale_by_size)
+                        if max_size and fs >= max_size then return max_size end
+                        return fs
+                    end
+
+                    -- Folder-icon placeholder (same style as book placeholder)
+                    local cover_frame = FrameContainer:new{
+                        width = cover_w + 2 * border_size,
+                        height = max_img + 2 * border_size,
+                        margin = 0, padding = 0, bordersize = border_size,
+                        CenterContainer:new{
+                            dimen = { w = cover_w, h = max_img },
+                            TextWidget:new{
+                                text = "\u{F024B}",  -- mdi-folder-open-outline
+                                face = Font:getFace("cfont", _fontSize(20)),
+                            },
+                        },
+                    }
+                    local wleft = CenterContainer:new{
+                        dimen = { w = cover_zone_w, h = dimen_h },
+                        cover_frame,
+                    }
+                    self._cover_frame = cover_frame
+
+                    local pad_left = Screen:scaleBySize(6)
+                    local left_offset = cover_zone_w + pad_left
+                    local main_w = math.max(1, self.width - left_offset)
+                    local fs_title = _fontSize(18, 21)
+
+                    local wtitle = TextBoxWidget:new{
+                        text  = BD.mirroredUILayout() and BD.ltr("../ ⬆") or "⬆  ../",
+                        face  = Font:getFace("cfont", fs_title),
+                        bold  = true,
+                        width = main_w,
+                    }
+                    local row_dimen = { w = self.width, h = dimen_h }
+                    local widget = OverlapGroup:new{
+                        dimen = row_dimen,
+                        LeftContainer:new{
+                            dimen = { w = self.width, h = dimen_h },
+                            HorizontalGroup:new{
+                                wleft,
+                                HorizontalSpan:new{ width = pad_left },
+                                CenterContainer:new{
+                                    dimen = { w = main_w, h = dimen_h },
+                                    LeftContainer:new{
+                                        dimen = { w = main_w, h = dimen_h },
+                                        wtitle,
+                                    },
+                                },
+                            },
+                        },
+                    }
+                    if self._underline_container[1] then
+                        self._underline_container[1]:free()
+                    end
+                    self._underline_container[1] = VerticalGroup:new{
+                        VerticalSpan:new{ width = underline_h },
+                        widget,
+                    }
+                    self.bookinfo_found = true
+                    self.init_done = true
+                end
+                return
             end
 
             -- filepath set in ListMenuItem:init()

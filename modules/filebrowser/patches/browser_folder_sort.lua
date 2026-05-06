@@ -57,8 +57,10 @@ local function apply_browser_folder_sort()
     -- Expose API on a well-known global to avoid a cross-module require cycle.
     _G.__ZEN_FOLDER_SORT = M
 
-    -- Wrap getCollate() to inject the per-folder override for the duration of
-    -- genItemTableFromPath (keyed by _zen_sort_override instance flag).
+    -- Wrap getCollate() and getSortingFunction() to inject per-folder overrides.
+    -- genItemTable() calls getCollate() for the collate object and reads
+    -- reverse_collate from G_reader_settings directly (not self.reverse_collate),
+    -- so we must intercept getSortingFunction to substitute the override's reverse.
 
     local orig_getCollate = FileChooser.getCollate
 
@@ -71,6 +73,21 @@ local function apply_browser_folder_sort()
             end
         end
         return orig_getCollate(self)
+    end
+
+    -- genItemTable() reads reverse_collate from G_reader_settings, bypassing
+    -- self.reverse_collate entirely. Intercept getSortingFunction to inject
+    -- the override's reverse when it is set. The nil-reverse_collate case is
+    -- the internal folder-name fallback sort; don't touch that.
+    local orig_getSortingFunction = FileChooser.getSortingFunction
+
+    FileChooser.getSortingFunction = function(self, collate, reverse_collate)
+        local override = self._zen_sort_override
+        if override and type(override) == "table" and type(override.reverse) == "boolean"
+                and reverse_collate ~= nil then
+            reverse_collate = override.reverse
+        end
+        return orig_getSortingFunction(self, collate, reverse_collate)
     end
 
     local orig_genItemTableFromPath = FileChooser.genItemTableFromPath
@@ -96,12 +113,9 @@ local function apply_browser_folder_sort()
             return orig_genItemTableFromPath(self, path, ...)
         end
 
-        -- Set the instance flags so getCollate() and reverse_collate checks see the override.
+        -- Set the instance flag so getCollate() and getSortingFunction() see the override.
         self._zen_sort_override = override
         local saved_reverse = self.reverse_collate
-        if type(override) == "table" and override.reverse ~= nil then
-            self.reverse_collate = override.reverse
-        end
 
         local ok, result_or_err = pcall(orig_genItemTableFromPath, self, path, ...)
 

@@ -7,6 +7,17 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
 local _ = require("gettext")
 
+-- Early conflict detection: checked before any potentially interfering code
+-- (font registration, icon injection) runs at module-load time.
+-- ptutil is unique to ProjectTitle and is required at the top of its main.lua,
+-- so it will be in package.loaded before our module-level code runs.
+local _pt_active = package.loaded["ptutil"] ~= nil
+if _pt_active then
+    logger.warn("ZenUI [module-load]: ProjectTitle detected via package.loaded['ptutil'] — skipping font registration")
+else
+    logger.info("ZenUI [module-load]: package.loaded['ptutil'] is nil — no conflict at module-load time")
+end
+
 local ConfigManager = require("config/manager")
 local registry = require("modules/registry")
 local zen_settings = require("modules/settings/zen_settings")
@@ -27,23 +38,53 @@ if _plugin_root then
         ["notice-question"] = zen_icon,
     })
     -- Register bundled SymbolsNerdFont as last-resort fallback for MDI glyphs.
-    -- Append (not prepend) so KOReader's own icon fonts resolve first; our
-    -- custom PUA codepoints are unique enough that they'll still reach this.
-    local ok_font, Font = pcall(require, "ui/font")
-    local ok_fl, FontList = pcall(require, "fontlist")
-    if ok_font and Font and Font.fallbacks and ok_fl and FontList then
-        pcall(function()
-            FontList:getFontList()
-            if type(FontList.fontlist) == "table" then
-                table.insert(FontList.fontlist, _plugin_root .. "/fonts/SymbolsNerdFont-Regular.ttf")
-            end
-            table.insert(Font.fallbacks, "SymbolsNerdFont-Regular.ttf")
-        end)
+    -- Skipped when ProjectTitle is active: crengine fails to register the font
+    -- on some devices, which causes a width=0 crash in ProjectTitle's TextWidget.
+    if not _pt_active then
+        local ok_font, Font = pcall(require, "ui/font")
+        local ok_fl, FontList = pcall(require, "fontlist")
+        if ok_font and Font and Font.fallbacks and ok_fl and FontList then
+            pcall(function()
+                FontList:getFontList()
+                if type(FontList.fontlist) == "table" then
+                    table.insert(FontList.fontlist, _plugin_root .. "/fonts/SymbolsNerdFont-Regular.ttf")
+                end
+                table.insert(Font.fallbacks, "SymbolsNerdFont-Regular.ttf")
+            end)
+        end
     end
 end
 
 -- Holds the single plugin instance so the FileManagerMenu patch can reach it.
 local _zen_plugin_ref = nil
+
+-- Defensive nil-action guard: prevent UIManager:scheduleIn/nextTick(nil) crashes.
+-- Installed once per process; logs a traceback so the real culprit can be identified.
+-- Catches bugs in Zen UI *and* in KOReader sync plugins (which share the same UIManager).
+if not rawget(_G, "__zen_ui_uimgr_guard") then
+    _G.__zen_ui_uimgr_guard = true
+    local ok_um, UIManager = pcall(require, "ui/uimanager")
+    if ok_um and UIManager then
+        local _orig_scheduleIn = UIManager.scheduleIn
+        UIManager.scheduleIn = function(self, seconds, action, ...)
+            if action == nil then
+                logger.warn("ZenUI guard: UIManager:scheduleIn(nil) suppressed\n" ..
+                    (debug and debug.traceback and debug.traceback("", 2) or ""))
+                return
+            end
+            return _orig_scheduleIn(self, seconds, action, ...)
+        end
+        local _orig_nextTick = UIManager.nextTick
+        UIManager.nextTick = function(self, action, ...)
+            if action == nil then
+                logger.warn("ZenUI guard: UIManager:nextTick(nil) suppressed\n" ..
+                    (debug and debug.traceback and debug.traceback("", 2) or ""))
+                return
+            end
+            return _orig_nextTick(self, action, ...)
+        end
+    end
+end
 
 local ZenUI = WidgetContainer:extend{
     name = "zen_ui",
@@ -85,6 +126,18 @@ function ZenUI:init()
     i18n.install()  -- reinstall after any context-switch uninstall (onCloseWidget removes it)
     self.config = ConfigManager.load()
     _zen_plugin_ref = self
+
+    -- Run incompatible-plugin detection before ANY module or patch loads.
+    do
+        local ok_compat, incompatible_check = pcall(require,
+            "modules/filebrowser/patches/incompatible_plugins_check")
+        if not ok_compat then
+            logger.warn("ZenUI [init]: failed to load incompatible_plugins_check:", incompatible_check)
+        elseif type(incompatible_check) == "function" and incompatible_check() then
+            logger.warn("ZenUI [init]: conflict found — aborting init, restart pending")
+            return
+        end
+    end
 
     -- First-run: backup user's original screensaver settings as a preset.
     if not self.config._meta.screensaver_backup_created then
@@ -446,10 +499,24 @@ function ZenUI:init()
     if self.ui and self.ui.menu and self.ui.menu.registerToMainMenu then
         self.ui.menu:registerToMainMenu(self)
     end
+
+    -- Trigger background update check on fresh startup too, not only on resume.
+    zen_updater.schedule_wakeup_check()
 end
 
 -- addToMainMenu is a no-op; tab injection is done via the FileManagerMenu patch.
 function ZenUI:addToMainMenu(menu_items) -- luacheck: ignore
+end
+
+-- On resume: schedule a background update check (if due + network up).
+-- Also called from init() so a fresh KOReader start triggers the same check.
+function ZenUI:onResume()
+    zen_updater.schedule_wakeup_check()
+end
+
+-- On suspend: cancel the pending timer so checks don't run while asleep.
+function ZenUI:onSuspend()
+    zen_updater.cancel_wakeup_check()
 end
 
 function ZenUI:onCloseWidget()

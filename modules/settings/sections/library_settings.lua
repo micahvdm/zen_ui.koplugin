@@ -93,6 +93,20 @@ function M.build(ctx)
                 end,
             },
             {
+                text = _("Show spine lines on folder covers"),
+                checked_func = function()
+                    local ok, bim = pcall(require, "bookinfomanager")
+                    if not ok then return true end
+                    return not bim:getSetting("folder_spine_lines_show")
+                end,
+                callback = function()
+                    local ok, bim = pcall(require, "bookinfomanager")
+                    if not ok then return end
+                    bim:toggleSetting("folder_spine_lines_show")
+                    UIManager:setDirty(nil, "full")
+                end,
+            },
+            {
                 text = _("Folder name position"),
                 sub_item_table = {
                     {
@@ -270,6 +284,22 @@ function M.build(ctx)
                         end,
                     },
                 },
+            },
+            {
+                text = _("Dim finished books"),
+                checked_func = function()
+                    return type(config.browser_cover_badges) == "table"
+                        and config.browser_cover_badges.dim_finished_books == true
+                end,
+                callback = function()
+                    if type(config.browser_cover_badges) ~= "table" then
+                        config.browser_cover_badges = {}
+                    end
+                    config.browser_cover_badges.dim_finished_books =
+                        not (config.browser_cover_badges.dim_finished_books == true)
+                    plugin:saveConfig()
+                    UIManager:setDirty(nil, "full")
+                end,
             },
             {
                 text = _("Rounded cover corners"),
@@ -747,27 +777,6 @@ function M.build(ctx)
     table.insert(items, {
         text = _("Scroll bar style"),
         sub_item_table = scroll_bar_sub_items,
-    })
-
-    table.insert(items, {
-        text = _("Hide finished books"),
-        checked_func = function()
-            return type(config.browser_hide_finished) == "table"
-                and config.browser_hide_finished.hide_finished == true
-        end,
-        callback = function()
-            if type(config.browser_hide_finished) ~= "table" then
-                config.browser_hide_finished = {}
-            end
-            config.browser_hide_finished.hide_finished =
-                not (config.browser_hide_finished.hide_finished == true)
-            plugin:saveConfig()
-            local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
-            local fm = ok and FileManager and FileManager.instance
-            if fm and fm.file_chooser and type(fm.file_chooser.refreshPath) == "function" then
-                pcall(fm.file_chooser.refreshPath, fm.file_chooser)
-            end
-        end,
     })
 
     -- -------------------------------------------------------------------------

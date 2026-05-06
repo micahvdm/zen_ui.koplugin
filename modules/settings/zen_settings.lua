@@ -16,8 +16,8 @@ local about_section    = require("modules/settings/sections/about_settings")
 local M = {}
 
 function M.build(plugin)
-    -- Lazy one-shot update check (cached; silent if offline or on failure).
-    updater.check_for_update()
+    -- Load cached update state for the banner; background check runs after resume.
+    updater.init_banner()
 
     local config = plugin.config
 
@@ -91,6 +91,7 @@ function M.build(plugin)
 
     utils.reorder_nested_items_by_text({ navbar_item }, _("Tabs"), {
         _("Visibility"),
+        _("Custom tabs"),
         _("Arrange tabs"),
     })
 

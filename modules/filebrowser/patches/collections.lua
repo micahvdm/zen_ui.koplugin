@@ -1,4 +1,5 @@
 local logger = require("logger")
+local icons  = require("common/inline_icon_map")
 logger.dbg("zen-coll: module loaded")
 
 local function apply_collections()
@@ -650,9 +651,8 @@ local function apply_collections()
                 fm.file_chooser:showSortOrderDialog({
                     current_reverse = cur_rev,
                     on_select       = function(reverse)
-                        if coll_settings then
-                            coll_settings.collate_reverse = reverse or nil
-                        end
+                        coll_settings.collate_reverse = reverse or nil
+                        ReadCollection:write({ [coll_name] = true })
                         if on_sort_applied then on_sort_applied() end
                     end,
                 })
@@ -694,21 +694,11 @@ local function apply_collections()
         end
 
         -- Extra buttons appended after Sort in the shared showFileDialog dialog
-        local extra_buttons = {
-            {{
-                text     = "\u{F0337}  " .. _("Connect folders"),
-                align    = "left",
-                callback = function()
-                    local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
-                    local fm = ok_fm and FM and FM.instance
-                    if fm then UIManager_cm:close(fm.file_chooser.file_dialog) end
-                    fm_coll:showCollFolderList(item)
-                end,
-            }},
-        }
+        local prepend_buttons = {}
+        local extra_buttons = {}
         if not is_favorites then
-            table.insert(extra_buttons, {{
-                text     = "\u{F0CB6}  " .. _("Rename"),
+            table.insert(prepend_buttons, {{
+                text     = icons.rename .. "  " .. _("Rename"),
                 align    = "left",
                 callback = function()
                     local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
@@ -717,8 +707,20 @@ local function apply_collections()
                     fm_coll:renameCollection(item)
                 end,
             }})
+        end
+        table.insert(extra_buttons, {{
+            text     = "\u{F0337}  " .. _("Connect folders"),
+            align    = "left",
+            callback = function()
+                local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+                local fm = ok_fm and FM and FM.instance
+                if fm then UIManager_cm:close(fm.file_chooser.file_dialog) end
+                fm_coll:showCollFolderList(item)
+            end,
+        }})
+        if not is_favorites then
             table.insert(extra_buttons, {{
-                text     = "\u{F0B89}  " .. _("Remove"),
+                text     = icons.delete .. "  " .. _("Delete collection"),
                 align    = "left",
                 callback = function()
                     local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
@@ -733,24 +735,25 @@ local function apply_collections()
         local fm = ok_fm and FM and FM.instance
         if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
             fm.file_chooser:showFileDialog({
-                _zen_group_files    = files,
-                _zen_group_name     = display_name,
-                _zen_group_subtitle = book_count == 1 and _("1 book")
+                _zen_group_files     = files,
+                _zen_group_name      = display_name,
+                _zen_group_subtitle  = book_count == 1 and _("1 book")
                                       or (tostring(book_count) .. " " .. _("books")),
                 -- dialog closed before sort_cb fires, so close_parent is a no-op
-                _zen_sort_cb        = function() show_coll_sort_submenu(coll_name, function() end) end,
-                _zen_extra_buttons  = extra_buttons,
+                _zen_sort_cb         = function() show_coll_sort_submenu(coll_name, function() end) end,
+                _zen_prepend_buttons = prepend_buttons,
+                _zen_extra_buttons   = extra_buttons,
             })
         else
             -- FM not available: show without cover gallery
             local button_dialog
-            local buttons = {
-                {{
-                    text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
-                    align    = "left",
-                    callback = function() show_coll_sort_submenu(coll_name, function() UIManager_cm:close(button_dialog) end) end,
-                }},
-            }
+            local buttons = {}
+            for _, row in ipairs(prepend_buttons) do table.insert(buttons, row) end
+            table.insert(buttons, {{
+                text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
+                align    = "left",
+                callback = function() show_coll_sort_submenu(coll_name, function() UIManager_cm:close(button_dialog) end) end,
+            }})
             for _, row in ipairs(extra_buttons) do table.insert(buttons, row) end
             button_dialog = ButtonDialog:new{ buttons = buttons }
             UIManager_cm:show(button_dialog)
@@ -761,7 +764,9 @@ local function apply_collections()
     ---------------------------------------------------------------------------
     -- Blank-space context menu inside a NAMED collection's book list
     ---------------------------------------------------------------------------
-    local function show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, display_name)
+    -- fav_navbar: true when this is the favorites collection opened from the navbar.
+    -- Controls reopen target (nil vs explicit name) and which display setting is saved.
+    local function show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, display_name, fav_navbar)
         local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
         local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
         if type(ft) == "table" and ft.lockdown_mode == true
@@ -789,17 +794,23 @@ local function apply_collections()
 
         local function reopen_collection()
             if menu then UIManager_nb:close(menu) end
-            fm_coll:onShowColl(raw_coll_name)
+            -- fav_navbar: pass nil so favorites.lua's wrapper sees navbar open (no back button).
+            -- Cannot use `fav_navbar and nil or raw_coll_name` — Lua `and/or` ternary breaks
+            -- when the truthy-branch value is nil (nil is falsy, so `or` always takes the rhs).
+            if fav_navbar then
+                fm_coll:onShowColl(nil)
+            else
+                fm_coll:onShowColl(raw_coll_name)
+            end
         end
 
         -- Display submenu (caller must close the parent dialog first)
+        -- Favorites and named collections share collection_display_mode.
         local function showDisplaySubmenu()
             local ok_bim, bim = pcall(require, "bookinfomanager")
             local cur_mode
             if ok_bim and bim then
-                local ok3, m = pcall(function()
-                    return bim:getSetting("collection_display_mode")
-                end)
+                local ok3, m = pcall(bim.getSetting, bim, "collection_display_mode")
                 if ok3 then cur_mode = m end
             end
             local function apply_mode(mode)
@@ -841,15 +852,19 @@ local function apply_collections()
         local fm = ok_fm and FM and FM.instance
         if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
             fm.file_chooser:showFileDialog({
-                _zen_group_files    = files,
-                _zen_group_name     = display_name,
-                _zen_group_subtitle = book_count == 1 and _("1 book")
-                                      or (tostring(book_count) .. " " .. _("books")),
+                _zen_group_files       = files,
+                _zen_group_name        = display_name,
+                _zen_group_subtitle    = book_count == 1 and _("1 book")
+                                         or (tostring(book_count) .. " " .. _("books")),
+                _zen_is_folder_view    = true,
                 -- context_menu.lua closes the dialog before invoking these callbacks
-                _zen_sort_cb        = function()
+                _zen_sort_cb           = function()
                     show_coll_sort_submenu(raw_coll_name, function() end, reopen_collection)
                 end,
-                _zen_display_cb     = showDisplaySubmenu,
+                _zen_display_cb        = showDisplaySubmenu,
+                _zen_filter_refresh_cb = function()
+                    reopen_collection()
+                end,
             })
         else
             -- Fallback: plain button dialog
@@ -951,6 +966,11 @@ local function apply_collections()
                 end,
             }},
             {{
+                text     = "\u{F06D0}  " .. _("Display") .. "  \u{25B8}",
+                align    = "left",
+                callback = showDisplaySubmenu,
+            }},
+            {{
                 text     = "\u{F04BF}  " .. _("Arrange"),
                 align    = "left",
                 callback = function()
@@ -965,11 +985,6 @@ local function apply_collections()
                     UIManager_bm:close(button_dialog)
                     fm_coll:onShowCollectionsSearchDialog()
                 end,
-            }},
-            {{
-                text     = "\u{F06D0}  " .. _("Display") .. "  \u{25B8}",
-                align    = "left",
-                callback = showDisplaySubmenu,
             }},
         }
         button_dialog = ButtonDialog:new{
@@ -1052,13 +1067,33 @@ local function apply_collections()
 
         local UIManager_mod = require("ui/uimanager")
 
-        -- Guard book-item hold inside a named collection
+        -- Guard book-item hold inside a named collection; route through Zen UI context menu.
         local orig_onMenuHold = menu.onMenuHold
         menu.onMenuHold = function(self_menu, item, pos)
             local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
             local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
             if type(ft) == "table" and ft.lockdown_mode == true
                     and type(lc) == "table" and lc.disable_context_menu == true then
+                return true
+            end
+            local f = item and (item.file or item.path)
+            if not f then
+                if orig_onMenuHold then return orig_onMenuHold(self_menu, item, pos) end
+                return
+            end
+            local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+            local fm = ok_fm and FM and FM.instance
+            if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
+                fm.file_chooser:showFileDialog({
+                    path     = f,
+                    is_file  = true,
+                    is_go_up = false,
+                    _zen_collection_name    = raw_coll_name,
+                    _zen_collection_refresh = function()
+                        pcall(UIManager_mod.close, UIManager_mod, menu)
+                        pcall(fm_coll.onShowColl, fm_coll, raw_coll_name)
+                    end,
+                })
                 return true
             end
             if orig_onMenuHold then return orig_onMenuHold(self_menu, item, pos) end
@@ -1236,6 +1271,35 @@ local function apply_collections()
         if not is_enabled() then return end
 
         if is_favorites and collection_name == nil then
+            -- Favorites accessed from the navbar: favorites.lua owns clean_nav,
+            -- but still wire up the blank-space hold so it shows the same
+            -- context menu as a named collection's blank-space hold.
+            local menu = self.booklist_menu
+            if menu and is_enabled() then
+                local _ = require("gettext")
+                local fav_display = _("Favorites")
+                local raw_fav = resolved_name
+                local fm_coll = self
+                local Device_fav = require("device")
+                if Device_fav:isTouchDevice() then
+                    local GestureRange_fav = require("ui/gesturerange")
+                    local Geom_fav         = require("ui/geometry")
+                    if not menu.ges_events then menu.ges_events = {} end
+                    menu.ges_events.ZenNamedCollBlankHold = {
+                        GestureRange_fav:new{
+                            ges   = "hold",
+                            range = Geom_fav:new{
+                                x = 0, y = 0,
+                                w = Device_fav.screen:getWidth(),
+                                h = Device_fav.screen:getHeight(),
+                            },
+                        },
+                    }
+                    menu.onZenNamedCollBlankHold = function()
+                        return show_named_coll_blank_menu(fm_coll, menu, raw_fav, fav_display, true)
+                    end
+                end
+            end
             return
         end
 

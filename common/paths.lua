@@ -26,6 +26,27 @@ function M.getHomeDir()
     return nil
 end
 
+-- Returns true if path is exactly one of the configured home roots
+-- (primary or additional), not merely below one.
+function M.isHomeRoot(path)
+    if not path then return false end
+    local norm = M.normPath(path:gsub("/$", ""))
+
+    local home = M.getHomeDir()
+    if home and norm == home then return true end
+
+    local g = rawget(_G, "G_reader_settings")
+    local zen_cfg = g and g:readSetting("zen_ui_config")
+    local extra = type(zen_cfg) == "table" and zen_cfg.additional_home_dirs
+    if type(extra) == "table" then
+        for _, dir in ipairs(extra) do
+            local d = M.normPath(dir:gsub("/*$", ""))
+            if d ~= "" and norm == d then return true end
+        end
+    end
+    return false
+end
+
 -- Returns true if path is at or directly under home_dir,
 -- or under any additional home dirs configured in zen_ui_config.
 -- Both path and home_dir are normalized before the comparison.

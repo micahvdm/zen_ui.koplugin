@@ -293,6 +293,94 @@ function M.getTBRBooks()
     return result
 end
 
+-- Returns a sorted list of tag groups from the keywords (Calibre tags) column:
+--   { { tag="Name", files={"/abs/path", ...} }, ... }
+-- Books may appear under multiple tags. Tags are split by comma and trimmed.
+-- Only includes books within home_dir that still exist on disk.
+function M.getGroupedByTags()
+    local db_path = getDbPath()
+    if not db_path then
+        logger.warn("zen-ui db_bookinfo: getGroupedByTags: bookinfo_cache.sqlite3 not found")
+        return {}
+    end
+
+    local home_dir = paths.getHomeDir()
+    local ok, conn = pcall(SQ3.open, db_path)
+    if not ok then
+        logger.warn("zen-ui db_bookinfo: getGroupedByTags: failed to open DB:", conn)
+        return {}
+    end
+    conn:set_busy_timeout(3000)
+
+    local tag_map = {}  -- tag_name -> { file_paths }
+
+    local ok2, err = pcall(function()
+        local sql = [[
+            SELECT directory, filename, keywords
+            FROM bookinfo
+            WHERE keywords IS NOT NULL
+              AND keywords != ''
+            ORDER BY filename
+        ]]
+        local res = conn:exec(sql)
+        if not res then return end
+
+        local dirs      = res[1] or {}
+        local filenames = res[2] or {}
+        local kw_col    = res[3] or {}
+
+        for i = 1, #dirs do
+            local dir   = dirs[i]
+            local fname = filenames[i]
+            local kw    = kw_col[i]
+            if not dir or not fname or not kw then goto continue end
+
+            local raw_filepath  = dir .. fname
+            local norm_filepath = paths.normPath(raw_filepath)
+
+            if home_dir and not paths.isInHomeDir(norm_filepath) then
+                goto continue
+            end
+            if lfs.attributes(norm_filepath, "mode") ~= "file" then
+                goto continue
+            end
+
+            -- Split newline-separated tags (KOReader default) and also handle comma-separated.
+            -- Replace commas with newlines so one gmatch handles both formats.
+            local normalized = kw:gsub(",", "\n")
+            for tag in normalized:gmatch("[^\n]+") do
+                local trimmed = tag:match("^%s*(.-)%s*$")
+                if trimmed and trimmed ~= "" then
+                    if not tag_map[trimmed] then
+                        tag_map[trimmed] = {}
+                    end
+                    table.insert(tag_map[trimmed], raw_filepath)
+                end
+            end
+
+            ::continue::
+        end
+    end)
+
+    conn:close()
+
+    if not ok2 then
+        logger.warn("zen-ui db_bookinfo: getGroupedByTags query error:", err)
+        return {}
+    end
+
+    local groups = {}
+    for tag, files in pairs(tag_map) do
+        table.insert(groups, { tag = tag, files = files })
+    end
+    table.sort(groups, function(a, b)
+        return a.tag < b.tag
+    end)
+
+    logger.dbg("zen-ui db_bookinfo: getGroupedByTags result:", #groups, "tags")
+    return groups
+end
+
 -- Returns the total number of fully-indexed books in the bookinfo cache
 -- that live under home_dir. Uses a SQL COUNT so no lfs calls are made.
 function M.getTotalBookCount()

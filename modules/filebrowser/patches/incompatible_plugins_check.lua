@@ -1,28 +1,16 @@
 -- incompatible_plugins_check.lua
 -- Detects incompatible plugins via package.loaded (not file system checks).
--- Disables them synchronously before any Zen UI patches run, then prompts restart.
---
--- Each entry:
---   name     = key used in G_reader_settings "plugins_disabled"
---   sentinel = a module that only this plugin loads; used for detection
---
--- Note: ProjectTitle registers as name="coverbrowser" (see its _meta.lua),
--- so its plugins_disabled key is "coverbrowser", not "projecttitle".
--- The sentinel "ptutil" is unique to ProjectTitle and distinguishes it from
--- the stock CoverBrowser plugin.
-local INCOMPATIBLE = {
-    { name = "simpleui",     sentinel = "sui_core", label = "Simple UI"       },
-    { name = "coverbrowser", sentinel = "ptutil",   label = "Project: Title" }, -- registers as coverbrowser
-}
+-- Two categories:
+--   MANUAL_BLOCK  -- Zen UI cannot auto-fix these. User is informed and init is halted.
+--   AUTO_DISABLE  -- Zen UI writes plugins_disabled and prompts restart.
 
--- Returns the plugin directory for an already-loaded sentinel module
--- using debug info, with no file system access.
+-- Returns the plugin directory for an already-loaded sentinel module.
 local function get_dir_from_loaded(sentinel)
     local mod = package.loaded[sentinel]
     if not mod then return nil end
     local src
     if type(mod) == "table" then
-        for _, v in pairs(mod) do
+        for _k, v in pairs(mod) do
             if type(v) == "function" then
                 local info = debug.getinfo(v, "S")
                 src = info and info.source
@@ -39,7 +27,12 @@ local function get_dir_from_loaded(sentinel)
     end
 end
 
--- Returns true if any Zen UI schedule feature is enabled.
+-- e.g. "/path/to/projecttitle.koplugin/" -> "projecttitle"
+local function get_folder_key(dir)
+    if not dir then return nil end
+    return dir:match("([^/]+)%.koplugin/?$")
+end
+
 local function any_zen_schedule_enabled()
     local plugin = rawget(_G, "__ZEN_UI_PLUGIN")
     local features = plugin and plugin.config and plugin.config.features
@@ -49,8 +42,44 @@ local function any_zen_schedule_enabled()
         or features.night_mode_schedule == true
 end
 
+-- Returns true if Project: Title is truly active (not just self-disabled).
+-- PT always requires("ptutil") before its self-disable check, so ptutil is in
+-- package.loaded even when PT has self-disabled. The real signal is whether
+-- plugins_disabled["coverbrowser"] == true, which is PT's hard load precondition.
+local function is_pt_active()
+    if package.loaded["ptutil"] == nil then return false end
+    local disabled_list = G_reader_settings and G_reader_settings:readSetting("plugins_disabled")
+    return type(disabled_list) == "table" and disabled_list["coverbrowser"] == true
+end
+
+-- Plugins that Zen UI will auto-disable (writes plugins_disabled, requires restart).
+local AUTO_DISABLE = {
+    { sentinel = "sui_core", label = "Simple UI", fallback_key = "simpleui" },
+}
+
 local function apply_incompatible_plugins_check()
-    if not G_reader_settings then return end
+    local logger = require("logger")
+
+    -- Manual-block check: inform user and halt init without touching anything.
+    if is_pt_active() then
+        logger.warn("ZenUI compat-check: BLOCKED by Project: Title -- user must remove it")
+        local UIManager = require("ui/uimanager")
+        UIManager:scheduleIn(0.5, function()
+            local _ = require("gettext")
+            local InfoMessage = require("ui/widget/infomessage")
+            UIManager:show(InfoMessage:new{
+                text = _("Project: Title is not compatible with Zen UI.")
+                    .. "\n\n" .. _("Please delete the Project: Title plugin from your plugins folder and restart KOReader."),
+                show_icon = false,
+            })
+        end)
+        return true
+    end
+
+    if not G_reader_settings then
+        logger.warn("ZenUI compat-check: G_reader_settings is nil, skipping")
+        return false
+    end
 
     local disabled_list = G_reader_settings:readSetting("plugins_disabled")
     if type(disabled_list) ~= "table" then disabled_list = {} end
@@ -58,47 +87,41 @@ local function apply_incompatible_plugins_check()
     local needs_restart = false
     local disabled_labels = {}
 
-    -- Disable incompatible plugins. Detection is purely via package.loaded:
-    -- if the sentinel module is loaded, the plugin is active this session.
-    for _, entry in ipairs(INCOMPATIBLE) do
-        if package.loaded[entry.sentinel] and disabled_list[entry.name] == nil then
+    for _, entry in ipairs(AUTO_DISABLE) do
+        local sentinel_loaded = package.loaded[entry.sentinel] ~= nil
+        if sentinel_loaded then
             local dir = get_dir_from_loaded(entry.sentinel)
-            disabled_list[entry.name] = dir or entry.name
-            disabled_labels[#disabled_labels + 1] = entry.label
-            -- Track that we placed ProjectTitle under the "coverbrowser" key
-            -- so the CoverBrowser re-enable logic below does not undo it.
-            if entry.sentinel == "ptutil" then
-                G_reader_settings:saveSetting("zen_ui_disabled_pt_as_cb", true)
+            local folder_key = get_folder_key(dir) or entry.fallback_key
+            local already_disabled = disabled_list[folder_key] ~= nil
+            logger.info("ZenUI compat-check:", entry.label,
+                "| loaded=true | folder_key=" .. tostring(folder_key),
+                "| already_disabled=" .. tostring(already_disabled))
+            if already_disabled then
+                -- In disabled_list but still loaded: bad state, force restart.
+                logger.warn("ZenUI compat-check:", entry.label, "in disabled list but still loaded -- forcing restart")
+                disabled_labels[#disabled_labels + 1] = entry.label
+                needs_restart = true
+            else
+                logger.warn("ZenUI compat-check: DISABLING", entry.label, "| key=" .. folder_key)
+                disabled_list[folder_key] = true
+                disabled_labels[#disabled_labels + 1] = entry.label
+                needs_restart = true
             end
-            needs_restart = true
         end
     end
 
-    -- Disable autowarmth only when a Zen UI schedule is active (they conflict).
-    if package.loaded["suntime"] and disabled_list["autowarmth"] == nil
+    -- Disable autowarmth when a Zen schedule is active (they conflict).
+    if package.loaded["suntime"] ~= nil and disabled_list["autowarmth"] == nil
             and any_zen_schedule_enabled() then
         local dir = get_dir_from_loaded("suntime")
-        disabled_list["autowarmth"] = dir or "autowarmth"
+        local folder_key = get_folder_key(dir) or "autowarmth"
+        logger.warn("ZenUI compat-check: DISABLING autowarmth | key=" .. folder_key)
+        disabled_list[folder_key] = true
         disabled_labels[#disabled_labels + 1] = "Auto warmth and night mode"
         needs_restart = true
     end
 
-    -- Enable real CoverBrowser if it is installed but disabled.
-    -- Skip if we know the "coverbrowser" slot holds ProjectTitle — re-enabling
-    -- it would bring the incompatible plugin back.
-    local pt_disabled_by_us = G_reader_settings:isTrue("zen_ui_disabled_pt_as_cb")
-    local ok_cm = pcall(require, "covermenu")
-    if not ok_cm and not pt_disabled_by_us and disabled_list["coverbrowser"] ~= nil then
-        disabled_list["coverbrowser"] = nil
-        needs_restart = true
-    end
-    -- Clear the PT flag once ProjectTitle is no longer blocking the slot
-    -- (e.g. user uninstalled PT and the "coverbrowser" slot is free again).
-    if pt_disabled_by_us and disabled_list["coverbrowser"] == nil then
-        G_reader_settings:delSetting("zen_ui_disabled_pt_as_cb")
-    end
-
-    if not needs_restart then return end
+    if not needs_restart then return false end
 
     G_reader_settings:saveSetting("plugins_disabled", disabled_list)
     G_reader_settings:flush()
@@ -108,9 +131,8 @@ local function apply_incompatible_plugins_check()
         local _ = require("gettext")
         local ConfirmBox = require("ui/widget/confirmbox")
         local Event = require("ui/event")
-        local plugin_list = table.concat(disabled_labels, "\n")
         UIManager:show(ConfirmBox:new{
-            text         = _("Incompatible plugins have been disabled:") .. "\n" .. plugin_list,
+            text         = _("Incompatible plugins have been disabled:") .. "\n" .. table.concat(disabled_labels, "\n"),
             dismissable  = false,
             no_ok_button = true,
             cancel_text  = _("Restart now"),
@@ -119,6 +141,7 @@ local function apply_incompatible_plugins_check()
             end,
         })
     end)
+    return true
 end
 
 return apply_incompatible_plugins_check

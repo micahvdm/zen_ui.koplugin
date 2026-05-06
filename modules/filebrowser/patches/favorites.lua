@@ -76,6 +76,12 @@ local function apply_favorites()
         -- items ensures the first *painted* frame is left-aligned.  Subsequent
         -- renders are handled by the updateItemTable hook below.
         menu._do_center_partial_rows = false
+        -- Clear onReturn before updateItems so updatePageInfo won't show the
+        -- page_return_arrow (stale coll_list ref on FileManagerCollection can
+        -- leave onReturn set even in the navbar-favorites case).
+        if not show_back then
+            menu.onReturn = nil
+        end
         local UIManager = require("ui/uimanager")
         menu:updateItems(1, true)
 
@@ -185,22 +191,6 @@ local function apply_favorites()
 
     local orig_onShowColl = FileManagerCollection.onShowColl
     function FileManagerCollection:onShowColl(collection_name)
-        -- Sync the collection display mode to match the filemanager (library)
-        -- display mode BEFORE orig_onShowColl runs, because that call creates
-        -- booklist_menu and immediately calls updateItemTable — which is when
-        -- CoverBrowser patches the instance with mosaic/list overrides.
-        -- We must set the correct mode before that first patching happens.
-        if is_enabled() and self.ui then
-            local coverbrowser = self.ui.coverbrowser
-            if coverbrowser and type(coverbrowser.setupWidgetDisplayMode) == "function" then
-                local BookInfoManager = require("bookinfomanager")
-                local fm_mode   = BookInfoManager:getSetting("filemanager_display_mode")
-                local coll_mode = BookInfoManager:getSetting("collection_display_mode")
-                if fm_mode ~= coll_mode then
-                    coverbrowser.setupWidgetDisplayMode("collections", fm_mode)
-                end
-            end
-        end
         orig_onShowColl(self, collection_name)
         if not is_enabled() then return end
         -- Only apply favorites customisations when actually viewing the favorites
@@ -232,11 +222,21 @@ local function apply_favorites()
         end
         local fm = require("apps/filemanager/filemanager").instance
         if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
+            local ok_rc, ReadCollection = pcall(require, "readcollection")
+            local fav_name = ok_rc and ReadCollection.default_collection_name or nil
+            local menu_ref = self  -- booklist_menu; self._manager = FileManagerCollection
+            local fmc_ref  = self._manager
             fm.file_chooser:showFileDialog({
                 path    = item.file,
                 is_file = true,
                 is_go_up = false,
                 text    = item.text,
+                _zen_collection_name    = fav_name,
+                _zen_collection_refresh = function()
+                    local UIManager = require("ui/uimanager")
+                    if menu_ref then pcall(UIManager.close, UIManager, menu_ref) end
+                    if fmc_ref  then pcall(fmc_ref.onShowColl, fmc_ref, nil) end
+                end,
             })
             return true
         end

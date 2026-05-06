@@ -7,6 +7,7 @@ local PATCH_MODULES = {
     reader_clock = "modules/reader/patches/reader_clock",
     screensaver_cover = "modules/reader/patches/screensaver_cover",
     reader_footer_time_format = "modules/reader/patches/reader_footer_time_format",
+    reader_footer_cbz_hide = "modules/reader/patches/reader_footer_cbz_hide",
     margin_hold_guard = "modules/reader/patches/margin_hold_guard",
     bookmarks = "modules/reader/patches/bookmarks",
     page_browser = "modules/reader/patches/page_browser",
@@ -77,6 +78,12 @@ function M.init(logger, plugin)
     local reader_footer_time_format_fn = load_patch("reader_footer_time_format")
     if reader_footer_time_format_fn then
         run_feature(logger, plugin, "reader_footer_time_format", reader_footer_time_format_fn)
+    end
+
+    -- Always apply: hide footer in CBZ files when setting is on (self-disables when off).
+    local reader_footer_cbz_hide_fn = load_patch("reader_footer_cbz_hide")
+    if reader_footer_cbz_hide_fn then
+        run_feature(logger, plugin, "reader_footer_cbz_hide", reader_footer_cbz_hide_fn)
     end
 
     -- Always apply: swallow holds inside page margins to prevent accidental word selection.

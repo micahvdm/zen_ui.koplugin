@@ -14,6 +14,7 @@ local function apply_context_menu()
     local _            = require("gettext")
     local C_           = _.pgettext
     local paths        = require("common/paths")
+    local icons        = require("common/inline_icon_map")
     local zen_plugin   = rawget(_G, "__ZEN_UI_PLUGIN")
 
     -- ── MoveChooser ──────────────────────────────────────────────────────────
@@ -56,7 +57,10 @@ local function apply_context_menu()
             })
         end
 
-        local function scan(dir_path, depth)
+        -- prefix: prepended to rel paths (e.g. "Books" -> "Books/1", "Books/2")
+        -- skip_set: set of realpath strings to omit entirely (not shown, not recursed)
+        local function scan(dir_path, depth, base, prefix, skip_set)
+            base = base or root
             local ok3, iter3, dir_obj3 = pcall(lfs3.dir, dir_path)
             if not ok3 then return end
             local subdirs = {}
@@ -71,22 +75,58 @@ local function apply_context_menu()
                 end
             end
             table.sort(subdirs, function(a, b) return a.name < b.name end)
-            for _, sub in ipairs(subdirs) do
-                local rel = sub.path:sub(#root + 2)  -- e.g. "Fantasy/Pratchett"
-                table.insert(items, {
-                    text           = rel,
-                    path           = sub.path,
-                    is_file        = false,
-                    bidi_wrap_func = BD3.directory,
-                    mandatory      = self:getMenuItemMandatory({ path = sub.path }),
-                })
-                if depth < MAX_DEPTH then
-                    scan(sub.path, depth + 1)
+            for _i, sub in ipairs(subdirs) do
+                local sub_real = ffiUtil3.realpath(sub.path) or sub.path
+                -- Skip paths already shown in another section (e.g. primary home is a subdir here)
+                if not (skip_set and skip_set[sub_real]) then
+                    local rel = sub.path:sub(#base + 2)  -- e.g. "Fantasy/Pratchett"
+                    local display = prefix and (prefix .. "/" .. rel) or rel
+                    table.insert(items, {
+                        text           = display,
+                        path           = sub.path,
+                        is_file        = false,
+                        bidi_wrap_func = BD3.directory,
+                        mandatory      = self:getMenuItemMandatory({ path = sub.path }),
+                    })
+                    if depth < MAX_DEPTH then
+                        scan(sub.path, depth + 1, base, prefix, skip_set)
+                    end
                 end
             end
         end
 
         scan(root, 1)
+
+        -- Append additional home dirs after all primary-root entries.
+        if type(self.extra_roots) == "table" then
+            -- Build a skip set: primary root + all other extra roots, so their
+            -- subtrees aren't duplicated when scanning a parent extra root.
+            local skip_set = { [root] = true }
+            for _i, er_path in ipairs(self.extra_roots) do
+                local er = ffiUtil3.realpath(er_path) or er_path
+                skip_set[er] = true
+            end
+
+            for _i, er_path in ipairs(self.extra_roots) do
+                local er = ffiUtil3.realpath(er_path) or er_path
+                if er ~= root then
+                    local er_name = ffiUtil3.basename(er)
+                    if not self.src_dir or self.src_dir ~= er then
+                        table.insert(items, {
+                            text           = er_name,
+                            path           = er,
+                            is_file        = false,
+                            bidi_wrap_func = BD3.directory,
+                            mandatory      = self:getMenuItemMandatory({ path = er }),
+                        })
+                    end
+                    -- Subfolders prefixed with root name: "Books/1", "Books/2"
+                    -- skip_set prevents showing already-listed roots as sub-entries
+                    scan(er, 1, er, er_name, skip_set)
+                end
+            end
+        end
+
         return items
     end
 
@@ -166,6 +206,9 @@ local function apply_context_menu()
         end
 
         file_chooser.showFileDialog = function(self_fc, item)
+            -- Never show a context menu for the up-folder item.
+            if item.is_go_up then return end
+
             -- Lockdown: block context menu across all views (filebrowser, groups, collections, etc.)
             if zen_plugin then
                 local ft = zen_plugin.config and zen_plugin.config.features
@@ -349,6 +392,22 @@ local function apply_context_menu()
                     },
                 }
                 local buttons = {}
+                -- Caller-supplied buttons to show before Sort
+                if item._zen_prepend_buttons then
+                    for _, row in ipairs(item._zen_prepend_buttons) do
+                        table.insert(buttons, row)
+                    end
+                end
+                if display_cb then
+                    table.insert(buttons, {{
+                        text     = "\u{F06D0}  " .. _("Display") .. "  \u{25B8}",
+                        align    = "left",
+                        callback = function()
+                            UIManager:close(self_fc.file_dialog)
+                            display_cb()
+                        end,
+                    }})
+                end
                 if sort_cb then
                     table.insert(buttons, {{
                         text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
@@ -359,13 +418,84 @@ local function apply_context_menu()
                         end,
                     }})
                 end
-                if display_cb then
+                -- Filter by read status (global setting, same as library filter)
+                -- Only shown inside a specific group/collection folder, not the top-level list.
+                local function showGroupFilterDialog()
+                    local cur_st = FileChooser.show_filter and FileChooser.show_filter.status
+                    local is_all = cur_st == nil
+                    local filter_dialog
+                    local function setGlobalFilter(new_status)
+                        if not FileChooser.show_filter then FileChooser.show_filter = {} end
+                        FileChooser.show_filter.status = new_status
+                        local gs = rawget(_G, "G_reader_settings")
+                        if gs then
+                            gs:saveSetting("show_filter", FileChooser.show_filter)
+                            pcall(gs.flush, gs)
+                        end
+                        self_fc:refreshPath()
+                        if item._zen_filter_refresh_cb then item._zen_filter_refresh_cb() end
+                    end
+                    local STATUS_OPTS = {
+                        { key = "new",       icon = icons.status,   label = _("Unread")     },
+                        { key = "reading",   icon = icons.reading,  label = _("Reading")    },
+                        { key = "abandoned", icon = icons.tbr,      label = _("To Be Read") },
+                        { key = "complete",  icon = icons.finished, label = _("Finished")   },
+                    }
+                    local fbts = {}
+                    table.insert(fbts, {{
+                        text     = _("All") .. (is_all and "  " .. icons.check or ""),
+                        align    = "left",
+                        enabled  = not is_all,
+                        callback = function()
+                            UIManager:close(filter_dialog)
+                            setGlobalFilter(nil)
+                        end,
+                    }})
+                    for _i, st in ipairs(STATUS_OPTS) do
+                        local is_active = cur_st and cur_st[st.key] == true
+                        table.insert(fbts, {{
+                            text     = st.icon .. "  " .. st.label
+                                .. (is_active and "  " .. icons.check or ""),
+                            align    = "left",
+                            callback = function()
+                                UIManager:close(filter_dialog)
+                                local new_st = {}
+                                if cur_st then
+                                    for _k, v in pairs(cur_st) do new_st[_k] = v end
+                                end
+                                if new_st[st.key] then new_st[st.key] = nil
+                                else new_st[st.key] = true end
+                                local n = 0
+                                for _k, v in pairs(new_st) do if v then n = n + 1 end end
+                                -- n==0 or all 4 selected collapses back to nil (All)
+                                if n == 0 or n == 4 then setGlobalFilter(nil)
+                                else setGlobalFilter(new_st) end
+                                UIManager:nextTick(showGroupFilterDialog)
+                            end,
+                        }})
+                    end
+                    filter_dialog = ButtonDialog:new{
+                        title       = _("Filter by status"),
+                        title_align = "center",
+                        buttons     = fbts,
+                    }
+                    UIManager:show(filter_dialog)
+                end
+                if item._zen_is_folder_view then
+                    local n_gf = 0
+                    if FileChooser.show_filter and FileChooser.show_filter.status then
+                        for _k, v in pairs(FileChooser.show_filter.status) do
+                            if v then n_gf = n_gf + 1 end
+                        end
+                    end
                     table.insert(buttons, {{
-                        text     = "\u{F06D0}  " .. _("Display") .. "  \u{25B8}",
+                        text     = icons.filter .. "  " .. _("Filter")
+                            .. (n_gf > 0 and " (" .. n_gf .. ")" or "")
+                            .. "  \u{25B8}",
                         align    = "left",
                         callback = function()
                             UIManager:close(self_fc.file_dialog)
-                            display_cb()
+                            UIManager:nextTick(showGroupFilterDialog)
                         end,
                     }})
                 end
@@ -383,14 +513,12 @@ local function apply_context_menu()
                 return true
             end
 
-            -- Delegate to stock KOReader dialog outside home directory.
-            local home_dir   = paths.getHomeDir()
-            local cur_path   = self_fc.path or ""
-            if home_dir then
-                local norm_cur = paths.normPath(cur_path:gsub("/$", ""))
-                local is_at_or_under_home = norm_cur == home_dir
-                    or norm_cur:sub(1, #home_dir + 1) == home_dir .. "/"
-                if not is_at_or_under_home then
+            -- Delegate to stock KOReader dialog outside home directory (and additional home dirs).
+            local home_dir = paths.getHomeDir()
+            local cur_path = self_fc.path or ""
+            -- Collection items can live anywhere; skip the home-dir gate for them.
+            if home_dir and not item._zen_collection_name then
+                if not paths.isInHomeDir(cur_path) then
                     return orig_showFileDialog(self_fc, item)
                 end
             end
@@ -398,8 +526,7 @@ local function apply_context_menu()
             local file               = item.path
             local is_file            = item.is_file
             local is_not_parent_folder = not item.is_go_up
-            local is_home_dir = (not is_file) and home_dir
-                and (paths.normPath(file:gsub("/$", "")) == home_dir)
+            local is_home_dir = (not is_file) and paths.isHomeRoot(file)
 
             local function close_dialog()
                 UIManager:close(self_fc.file_dialog)
@@ -1144,6 +1271,11 @@ local function apply_context_menu()
                                 or file_chooser.path
                             if not home_dir then return end
                             local src_dir = ffiUtil.realpath(ffiUtil.dirname(src))
+                            local _g = rawget(_G, "G_reader_settings")
+                            local _zen_cfg = _g and _g:readSetting("zen_ui_config")
+                            local _extra = type(_zen_cfg) == "table"
+                                and type(_zen_cfg.additional_home_dirs) == "table"
+                                and _zen_cfg.additional_home_dirs or nil
                             local chooser = MoveChooser:new{
                                 select_directory = true,
                                 select_file      = false,
@@ -1151,6 +1283,7 @@ local function apply_context_menu()
                                 title            = _("Move to…"),
                                 path             = home_dir,
                                 src_dir          = src_dir,
+                                extra_roots      = _extra,
                                 onConfirm        = function(dest_dir_real)
                                     local name      = ffiUtil.basename(src)
                                     local dest_file = ffiUtil.joinPath(dest_dir_real, name)
@@ -1219,24 +1352,78 @@ local function apply_context_menu()
 
             if is_file then
                 local ReadCollection = require("readcollection")
-                local default_coll   = ReadCollection.default_collection_name
-                local is_fav         = ReadCollection:isFileInCollection(file, default_coll)
 
-                table.insert(buttons, {
-                    {
-                        text = is_fav and ("\u{F04D2}  " .. _("Remove from favorites")) or ("\u{F04CE}  " .. _("Add to favorites")),
-                        align    = "left",
-                        callback = function()
-                            close_dialog()
-                            if is_fav then
-                                ReadCollection:removeItem(file, default_coll)
-                            else
-                                ReadCollection:addItem(file, default_coll)
-                            end
-                            ReadCollection:write({ [default_coll] = true })
-                        end,
-                    },
-                })
+                -- Remove from collection (only when inside a named collection view)
+                if item._zen_collection_name then
+                    local coll_name = item._zen_collection_name
+                    table.insert(buttons, {
+                        {
+                            text     = "\u{F04D2}  " .. _("Remove from collection"),
+                            align    = "left",
+                            callback = function()
+                                close_dialog()
+                                ReadCollection:removeItem(file, coll_name)
+                                ReadCollection:write({ [coll_name] = true })
+                                if item._zen_collection_refresh then
+                                    UIManager:nextTick(item._zen_collection_refresh)
+                                end
+                            end,
+                        },
+                    })
+                end
+
+                -- Add to collection: paginated Menu picker (skip when already inside a collection)
+                if not item._zen_collection_name then
+                    table.insert(buttons, {
+                        {
+                            text     = "\u{F04CE}  " .. _("Add to collection") .. "  \u{25B6}",
+                            align    = "left",
+                            callback = function()
+                                close_dialog()
+                                local Menu_cp      = require("ui/widget/menu")
+                                local default_coll = ReadCollection.default_collection_name
+                                local all_colls    = {}
+                                for cn, _v in pairs(ReadCollection.coll) do
+                                    table.insert(all_colls, cn)
+                                end
+                                table.sort(all_colls, function(a, b)
+                                    if a == default_coll then return true end
+                                    if b == default_coll then return false end
+                                    return a < b
+                                end)
+                                local items = {}
+                                for _i, cn in ipairs(all_colls) do
+                                    local display    = cn == default_coll and _("Favorites") or cn
+                                    local already_in = ReadCollection:isFileInCollection(file, cn)
+                                    table.insert(items, {
+                                        text      = display .. (already_in and "  \u{2713}" or ""),
+                                        mandatory = already_in and _("added") or nil,
+                                        dim       = already_in,
+                                        _cn       = cn,
+                                    })
+                                end
+                                local coll_picker
+                                coll_picker = Menu_cp:new{
+                                    title         = _("Add to collection"),
+                                    item_table    = items,
+                                    is_borderless = true,
+                                    is_popout     = false,
+                                    onMenuSelect  = function(self_m, item_m)
+                                        if item_m.dim then return true end
+                                        UIManager:close(coll_picker)
+                                        ReadCollection:addItem(file, item_m._cn)
+                                        ReadCollection:write({ [item_m._cn] = true })
+                                        return true
+                                    end,
+                                    close_callback = function()
+                                        UIManager:close(coll_picker)
+                                    end,
+                                }
+                                UIManager:show(coll_picker)
+                            end,
+                        },
+                    })
+                end
             end
 
             if is_file and is_not_parent_folder then
@@ -1299,14 +1486,68 @@ local function apply_context_menu()
                 })
             end
 
+            -- ── Display mode (current dir only) ──────────────────────────────────────
+            if item._is_current_dir then
+                local function showViewSubmenu()
+                    close_dialog()
+                    local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+                    local fm          = ok_fm and FM and FM.instance
+                    local ok_bim, bim = pcall(require, "bookinfomanager")
+                    local cur_mode
+                    if ok_bim and bim then
+                        local ok3, m = pcall(function()
+                            return bim:getSetting("filemanager_display_mode")
+                        end)
+                        if ok3 then cur_mode = m end
+                    end
+                    local function apply_mode(mode)
+                        if fm and type(fm.onSetDisplayMode) == "function" then
+                            pcall(fm.onSetDisplayMode, fm, mode)
+                        elseif ok_bim and bim then
+                            pcall(bim.saveSetting, bim, "filemanager_display_mode", mode)
+                        end
+                    end
+                    local view_dialog
+                    local function viewBtn(label, icon, mode)
+                        local active = cur_mode == mode
+                        return {{
+                            text     = icon .. "  " .. label .. (active and "  \u{2713}" or ""),
+                            align    = "left",
+                            enabled  = not active,
+                            callback = function()
+                                UIManager:close(view_dialog)
+                                apply_mode(mode)
+                            end,
+                        }}
+                    end
+                    view_dialog = ButtonDialog:new{
+                        title       = _("Display mode"),
+                        title_align = "center",
+                        buttons     = {
+                            viewBtn(_("Mosaic"),          "\u{F11D9}", "mosaic_image"),
+                            viewBtn(_("List (detailed)"), "\u{F148B}", "list_image_meta"),
+                            viewBtn(_("List (basic)"),    "\u{F0279}", "list_image_filename"),
+                        },
+                    }
+                    UIManager:show(view_dialog)
+                end
+
+                table.insert(buttons, {
+                    {
+                        text     = "\u{F06D0}  " .. _("Display") .. "  ▶",
+                        align    = "left",
+                        callback = showViewSubmenu,
+                    },
+                })
+            end
+
             -- ── Sort (folders only) ───────────────────────────────────────────────────
             if not is_file and is_not_parent_folder then
                 local SORT_OPTIONS = {
-                    { key = "title",    text = "\u{F04BB}  " .. _("Title")         },
-                    { key = "authors",  text = "\u{F0013}  " .. _("Authors")       },
-                    { key = "series",   text = "\u{F0436}  " .. _("Series")        },
-                    { key = "access",   text = "\u{F02DA}  " .. _("Recently read") },
-                    { key = "keywords", text = "\u{F12F7}  " .. _("Keywords")      },
+                    { key = "title",   text = "\u{F04BB}  " .. _("Title")         },
+                    { key = "authors", text = "\u{F0013}  " .. _("Authors")       },
+                    { key = "series",  text = "\u{F0436}  " .. _("Series")        },
+                    { key = "access",  text = "\u{F02DA}  " .. _("Recently read") },
                 }
 
                 if is_home_dir then
@@ -1398,6 +1639,7 @@ local function apply_context_menu()
                                             callback = function()
                                                 fsd_api.set(real_folder, opt.key, cur_reverse)
                                                 UIManager:close(sort_dialog)
+                                                self_fc:refreshPath()
                                             end,
                                         }})
                                     end
@@ -1412,6 +1654,7 @@ local function apply_context_menu()
                                                 on_select       = function(reverse)
                                                     if cur_collate then
                                                         fsd_api.set(real_folder, cur_collate, reverse)
+                                                        self_fc:refreshPath()
                                                     end
                                                 end,
                                             })
@@ -1426,6 +1669,7 @@ local function apply_context_menu()
                                             callback = function()
                                                 fsd_api.clear(real_folder)
                                                 UIManager:close(sort_dialog)
+                                                self_fc:refreshPath()
                                             end,
                                         }})
                                     end
@@ -1442,57 +1686,90 @@ local function apply_context_menu()
                 end
             end
 
-            -- ── Display mode (current dir only) ──────────────────────────────────────
+            -- ── Filter by read status (current dir only) ─────────────────────────────
             if item._is_current_dir then
-                local function showViewSubmenu()
-                    close_dialog()
-                    local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
-                    local fm          = ok_fm and FM and FM.instance
-                    local ok_bim, bim = pcall(require, "bookinfomanager")
-                    local cur_mode
-                    if ok_bim and bim then
-                        local ok3, m = pcall(function()
-                            return bim:getSetting("filemanager_display_mode")
-                        end)
-                        if ok3 then cur_mode = m end
-                    end
-                    local function apply_mode(mode)
-                        if fm and type(fm.onSetDisplayMode) == "function" then
-                            pcall(fm.onSetDisplayMode, fm, mode)
-                        elseif ok_bim and bim then
-                            pcall(bim.saveSetting, bim, "filemanager_display_mode", mode)
+                local function showFilterDialog()
+                    local cur_st = FileChooser.show_filter and FileChooser.show_filter.status
+                    local is_all = cur_st == nil
+                    local filter_dialog
+
+                    local function setFilter(new_status)
+                        FileChooser.show_filter.status = new_status
+                        local gs = rawget(_G, "G_reader_settings")
+                        if gs then
+                            gs:saveSetting("show_filter", FileChooser.show_filter)
+                            pcall(gs.flush, gs)
                         end
+                        self_fc:refreshPath()
                     end
-                    local view_dialog
-                    local function viewBtn(label, icon, mode)
-                        local active = cur_mode == mode
-                        return {{
-                            text     = icon .. "  " .. label .. (active and "  \u{2713}" or ""),
-                            align    = "left",
-                            enabled  = not active,
-                            callback = function()
-                                UIManager:close(view_dialog)
-                                apply_mode(mode)
-                            end,
-                        }}
-                    end
-                    view_dialog = ButtonDialog:new{
-                        title       = _("Display mode"),
-                        title_align = "center",
-                        buttons     = {
-                            viewBtn(_("Mosaic"),          "\u{F11D9}", "mosaic_image"),
-                            viewBtn(_("List (detailed)"), "\u{F148B}", "list_image_meta"),
-                            viewBtn(_("List (basic)"),    "\u{F0279}", "list_image_filename"),
-                        },
+
+                    local STATUS_OPTS = {
+                        { key = "new",       icon = icons.status,   label = _("Unread")     },
+                        { key = "reading",   icon = icons.reading,  label = _("Reading")    },
+                        { key = "abandoned", icon = icons.tbr,      label = _("To Be Read") },
+                        { key = "complete",  icon = icons.finished, label = _("Finished")   },
                     }
-                    UIManager:show(view_dialog)
+
+                    local fbts = {}
+                    table.insert(fbts, {{
+                        text     = _("All") .. (is_all and "  " .. icons.check or ""),
+                        align    = "left",
+                        enabled  = not is_all,
+                        callback = function()
+                            UIManager:close(filter_dialog)
+                            setFilter(nil)
+                        end,
+                    }})
+                    for _, st in ipairs(STATUS_OPTS) do
+                        local is_active = cur_st and cur_st[st.key] == true
+                        table.insert(fbts, {{
+                            text     = st.icon .. "  " .. st.label .. (is_active and "  " .. icons.check or ""),
+                            align    = "left",
+                            callback = function()
+                                UIManager:close(filter_dialog)
+                                local new_st = {}
+                                if cur_st then
+                                    for k, v in pairs(cur_st) do new_st[k] = v end
+                                end
+                                if new_st[st.key] then
+                                    new_st[st.key] = nil
+                                else
+                                    new_st[st.key] = true
+                                end
+                                local n = 0
+                                for _, v in pairs(new_st) do if v then n = n + 1 end end
+                                -- n==0 or all 4 selected collapses back to nil (All)
+                                if n == 0 or n == 4 then setFilter(nil)
+                                else setFilter(new_st) end
+                                UIManager:nextTick(showFilterDialog)
+                            end,
+                        }})
+                    end
+
+                    filter_dialog = ButtonDialog:new{
+                        title       = _("Filter by status"),
+                        title_align = "center",
+                        buttons     = fbts,
+                    }
+                    UIManager:show(filter_dialog)
                 end
 
+                local n_active = 0
+                if FileChooser.show_filter and FileChooser.show_filter.status then
+                    for _, v in pairs(FileChooser.show_filter.status) do
+                        if v then n_active = n_active + 1 end
+                    end
+                end
                 table.insert(buttons, {
                     {
-                        text     = "\u{F06D0}  " .. _("Display") .. "  ▶",
+                        text     = icons.filter .. "  " .. _("Filter")
+                            .. (n_active > 0 and " (" .. n_active .. ")" or "")
+                            .. "  ▶",
                         align    = "left",
-                        callback = showViewSubmenu,
+                        callback = function()
+                            close_dialog()
+                            UIManager:nextTick(showFilterDialog)
+                        end,
                     },
                 })
             end
@@ -1504,6 +1781,13 @@ local function apply_context_menu()
                     callback = showEditSubmenu,
                 },
             })
+
+            -- Caller-supplied extra buttons (e.g. "Remove from history")
+            if item._zen_extra_buttons then
+                for _, row in ipairs(item._zen_extra_buttons) do
+                    table.insert(buttons, row)
+                end
+            end
 
             -- NOTE: using an explicit local avoids the Lua `A and nil or B` gotcha
             -- where `nil` is falsy so the expression always returns B.

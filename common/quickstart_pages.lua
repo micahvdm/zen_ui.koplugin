@@ -196,6 +196,129 @@ local function buildHomeIconBB(avail_w)
     return canvas
 end
 
+-- Render a visual replica of the context menu dialog (ButtonDialog with cover header +
+-- the real file-action buttons). cover_info is an optional entry from loadQuickstartCovers.
+-- Returns a Blitbuffer (caller owns) or nil on error.
+-- slot_w/slot_h are the QuickstartScreen image zone dimensions; canvas fills it 1:1.
+local function buildContextMenuBB(slot_w, slot_h, cover_info)
+    local ok_bb,  Blitbuffer  = pcall(require, "ffi/blitbuffer")
+    local ok_dev, Device      = pcall(require, "device")
+    local ok_bd,  ButtonDialog = pcall(require, "ui/widget/buttondialog")
+    if not (ok_bb and ok_dev and ok_bd) then return nil end
+
+    local Screen = Device.screen
+    local _      = require("gettext")
+
+    -- Dialog at 85% of slot width; canvas is the full slot so scale_factor=0 renders 1:1.
+    local dlg_w = math.floor(slot_w * 0.85)
+
+    -- Build the cover+title header (mirrors context_menu.lua's makeSideBySide).
+    local header_widget
+    pcall(function()
+        local SizeR           = require("ui/size")
+        local Font            = require("ui/font")
+        local Geom            = require("ui/geometry")
+        local FrameContainer  = require("ui/widget/container/framecontainer")
+        local HorizontalGroup = require("ui/widget/horizontalgroup")
+        local HorizontalSpan  = require("ui/widget/horizontalspan")
+        local LeftContainer   = require("ui/widget/container/leftcontainer")
+        local TextWidget      = require("ui/widget/textwidget")
+        local VerticalGroup   = require("ui/widget/verticalgroup")
+        local VerticalSpan    = require("ui/widget/verticalspan")
+        local Widget          = require("ui/widget/widget")
+
+        local border      = SizeR.border.thin
+        local gap         = Screen:scaleBySize(8)
+        local avail_inner = dlg_w
+            - 2 * (SizeR.border.window + SizeR.padding.button)
+            - 2 * (SizeR.padding.default + SizeR.margin.default)
+        local cover_max_w = Screen:scaleBySize(90)
+        local cover_max_h = Screen:scaleBySize(140)
+        local text_col_w  = math.max(avail_inner - cover_max_w - 2 * border - gap,
+                                     Screen:scaleBySize(60))
+
+        local cover_frame
+        if cover_info then
+            local ok_iw,  ImageWidget     = pcall(require, "ui/widget/imagewidget")
+            local ok_bim, BookInfoManager = pcall(require, "bookinfomanager")
+            if ok_iw and ok_bim then
+                local _, _, sf = BookInfoManager.getCachedCoverSize(
+                    cover_info.w, cover_info.h, cover_max_w, cover_max_h)
+                cover_frame = FrameContainer:new{
+                    padding    = 0,
+                    bordersize = border,
+                    ImageWidget:new{
+                        image            = cover_info.bb,
+                        image_disposable = false,
+                        scale_factor     = sf,
+                    },
+                }
+            end
+        end
+        if not cover_frame then
+            cover_frame = FrameContainer:new{
+                padding    = 0,
+                bordersize = border,
+                background = Blitbuffer.COLOR_LIGHT_GRAY,
+                Widget:new{ dimen = Geom:new{ w = cover_max_w, h = cover_max_h } },
+            }
+        end
+
+        local vstack = VerticalGroup:new{ align = "left" }
+        table.insert(vstack, TextWidget:new{
+            text      = (cover_info and cover_info.title) or _("Book Title"),
+            face      = Font:getFace("cfont", 20),
+            bold      = true,
+            max_width = text_col_w,
+        })
+        if cover_info and cover_info.authors then
+            table.insert(vstack, VerticalSpan:new{ width = Screen:scaleBySize(2) })
+            table.insert(vstack, TextWidget:new{
+                text      = cover_info.authors,
+                face      = Font:getFace("cfont", 17),
+                max_width = text_col_w,
+            })
+        end
+
+        local framed_h = cover_max_h + 2 * border
+        header_widget = LeftContainer:new{
+            dimen = Geom:new{ w = avail_inner, h = framed_h },
+            HorizontalGroup:new{
+                align = "center",
+                cover_frame,
+                HorizontalSpan:new{ width = gap },
+                vstack,
+            },
+        }
+    end)
+
+    local buttons = {
+        {{ text = "\u{F02FD}  " .. _("Details"),                              align = "left", callback = function() end }},
+        {{ text = "\u{F01BE}  " .. _("Move"),                                 align = "left", callback = function() end }},
+        {{ text = "\u{F04CE}  " .. _("Add to collection") .. "  \u{25B6}",   align = "left", callback = function() end }},
+        {{ text = "\u{F0B64}  " .. _("Read status") .. "  \u{25B6}",         align = "left", callback = function() end }},
+        {{ text = "\u{F090C}  " .. _("Edit") .. "  \u{25B6}",                align = "left", callback = function() end }},
+    }
+
+    local dialog = ButtonDialog:new{
+        buttons        = buttons,
+        width          = dlg_w,
+        dismissable    = false,
+        _added_widgets = header_widget and { header_widget } or nil,
+    }
+
+    local sz = dialog:getSize()
+    local canvas = Blitbuffer.new(slot_w, slot_h, Blitbuffer.TYPE_BB8)
+    canvas:fill(Blitbuffer.COLOR_WHITE)
+    -- Center dialog horizontally; leave equal top/bottom breathing room.
+    local dx = math.floor((slot_w - sz.w) / 2)
+    local dy = math.floor((slot_h - sz.h) / 2)
+    pcall(function()
+        dialog:paintTo(canvas, dx, dy)
+    end)
+    return canvas
+end
+
 -- Render the zen-mode quicksettings button (circle border + quick_zen icon) centered
 -- on a white canvas. Returns a Blitbuffer (caller owns) or nil on error.
 local function buildZenButtonBB(avail_w)
@@ -818,16 +941,26 @@ function M.build_install_pages(ctx)
     local ok_inject, err_inject = pcall(function()
         local covers  = loadQuickstartCovers(3)
         local Device  = require("device")
-        local avail_w = Device.screen:getWidth() - Device.screen:scaleBySize(80)
-        local mosaic_bb  = #covers > 0 and buildMosaicBB(covers, avail_w) or nil
-        local list_bb    = #covers > 0 and buildListBB(covers, avail_w) or nil
-        local browser_bb = #covers > 0 and buildMosaicBB(covers, avail_w) or nil
-        local zen_bb     = buildZenButtonBB(avail_w)
-        local home_bb    = buildHomeIconBB(avail_w)
+        local scr_w   = Device.screen:getWidth()
+        local scr_h   = Device.screen:getHeight()
+        local avail_w = scr_w - Device.screen:scaleBySize(80)
+        -- Mirror QuickstartScreen's image slot dimensions so the canvas fills it at 1:1.
+        local qs_pad  = Device.screen:scaleBySize(20)
+        local img_h   = scr_h - Device.screen:scaleBySize(60) - 1 - math.floor(scr_h * 0.40)
+        local slot_w  = scr_w - qs_pad * 2
+        local slot_h  = img_h - Device.screen:scaleBySize(8)
+        local mosaic_bb       = #covers > 0 and buildMosaicBB(covers, avail_w) or nil
+        local list_bb         = #covers > 0 and buildListBB(covers, avail_w) or nil
+        local browser_bb      = #covers > 0 and buildMosaicBB(covers, avail_w) or nil
+        local context_menu_bb = buildContextMenuBB(slot_w, slot_h, covers[1])
+        local zen_bb          = buildZenButtonBB(avail_w)
+        local home_bb         = buildHomeIconBB(avail_w)
         for _, c in ipairs(covers) do c.bb:free() end
         for _i, page in ipairs(pages) do
             if page.title == _("File Browser") and browser_bb then
                 page.image_bb, page.image = browser_bb, nil
+            elseif page.title == _("Context Menu") and context_menu_bb then
+                page.image_bb, page.image = context_menu_bb, nil
             elseif page.title == _("Zen Mode") and zen_bb then
                 page.image_bb, page.image = zen_bb, nil
             elseif page.title == _("Home Folder") and home_bb then

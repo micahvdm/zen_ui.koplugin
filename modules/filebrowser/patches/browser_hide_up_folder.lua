@@ -1,6 +1,7 @@
 local function apply_browser_hide_up_folder()
     local BD = require("ui/bidi")
     local FileChooser = require("ui/widget/filechooser")
+    local paths = require("common/paths")
 
     local zen_plugin = rawget(_G, "__ZEN_UI_PLUGIN")
     if not zen_plugin or type(zen_plugin.config) ~= "table" then
@@ -47,20 +48,37 @@ local function apply_browser_hide_up_folder()
 
     function FileChooser:genItemTable(dirs, files, path)
         local item_table = orig_FileChooser_genItemTable(self, dirs, files, path)
-        if not is_enabled() then
+        if self._dummy or self.name ~= "filemanager" then
             return item_table
         end
-        if self._dummy or self.name ~= "filemanager" then
+
+        -- Force-hide up-folder at home root when zen mode or KOReader's lock_home_folder is active
+        local at_home_root = paths.isHomeRoot(path)
+        local is_zen = type(zen_plugin.config.features) == "table"
+            and zen_plugin.config.features.zen_mode == true
+        local g_settings = rawget(_G, "G_reader_settings")
+        local force_hide_at_home = at_home_root
+            and (is_zen or (g_settings ~= nil and g_settings:isTrue("lock_home_folder")))
+
+        local enabled = is_enabled()
+        if not enabled and not force_hide_at_home then
             return item_table
         end
 
         local items = {}
         local is_sub_folder = false
-        for _, item in ipairs(item_table) do
+        for _i, item in ipairs(item_table) do
             if item.path:find("\u{e257}/") then
                 table.insert(items, item)
-            elseif (item.is_go_up or item.text:find("\u{2B06} ..")) and config.hide_up_folder then
-                is_sub_folder = true
+            elseif item.is_go_up or item.text:find("\u{2B06} ..") then
+                -- hide when at locked/zen home root, or when the setting says to
+                if force_hide_at_home or (enabled and config.hide_up_folder) then
+                    if not force_hide_at_home then
+                        is_sub_folder = true  -- deeper level: show back icon
+                    end
+                else
+                    table.insert(items, item)
+                end
             else
                 table.insert(items, item)
             end

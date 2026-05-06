@@ -136,6 +136,7 @@ local defaults = {
         show_native_progress_bar = false,
         show_new_banner = true,
         badge_size = "compact",
+        dim_finished_books = false,
     },
     bible_mode = {
         enabled = true,
@@ -176,6 +177,7 @@ local defaults = {
     },
     reader_footer = {
         verbose_chapter_time = false,
+        hide_in_cbz = false,
         backup_preset = nil,
     },
     highlight_lookup = {

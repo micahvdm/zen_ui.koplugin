@@ -59,7 +59,7 @@ return {
     sync         = "\u{F04E6}",  -- mdi-sync
     download     = "\u{F01DA}",  -- mdi-download
     add          = "\u{F067}",   -- nf-fa-plus
-    filter       = "\u{F0B0}",   -- nf-fa-filter
+    filter       = "\u{F0233}",  -- mdi-filter-variant
 
     -- status bar (status_bar.lua)
     wifi_on      = "\u{ECA8}",   -- nf-md-wifi

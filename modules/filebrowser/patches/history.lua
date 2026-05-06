@@ -1,6 +1,7 @@
 local function apply_history()
     local FileManagerHistory = require("apps/filemanager/filemanagerhistory")
     local Menu = require("ui/widget/menu")
+    local _ = require("gettext")
 
     local zen_plugin = rawget(_G, "__ZEN_UI_PLUGIN")
     if not zen_plugin or type(zen_plugin.config) ~= "table" then
@@ -232,11 +233,36 @@ local function apply_history()
         end
         local fm = require("apps/filemanager/filemanager").instance
         if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
+            local hist_mgr = self._manager
+            local function do_remove()
+                local fc = fm.file_chooser
+                if fc.file_dialog then
+                    require("ui/uimanager"):close(fc.file_dialog)
+                    fc.file_dialog = nil
+                end
+                -- index only valid with no active filter/search
+                local index = item.idx
+                if hist_mgr and (hist_mgr.search_string
+                        or hist_mgr.selected_collections
+                        or hist_mgr.filter ~= "all") then
+                    index = nil
+                end
+                require("readhistory"):removeItem(item, index)
+                if hist_mgr then hist_mgr:updateItemTable() end
+            end
+            local icons = require("common/inline_icon_map")
             fm.file_chooser:showFileDialog({
-                path    = item.file,
-                is_file = true,
+                path     = item.file,
+                is_file  = true,
                 is_go_up = false,
-                text    = item.text,
+                text     = item.text,
+                _zen_extra_buttons = {
+                    {{
+                        text     = icons.delete .. "  " .. _("Remove from history"),
+                        align    = "left",
+                        callback = do_remove,
+                    }},
+                },
             })
             return true
         end

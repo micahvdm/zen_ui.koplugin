@@ -67,16 +67,7 @@ local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_sele
     local per_page      = cols * rows_per_page
     local total_pages   = math.max(1, math.ceil(math.max(#icons_list, 1) / per_page))
 
-    -- Start on the page that contains the currently-selected icon.
     local cur_page = 1
-    if current_icon then
-        for i, name in ipairs(icons_list) do
-            if name == current_icon then
-                cur_page = math.ceil(i / per_page)
-                break
-            end
-        end
-    end
 
     -- Pre-build one VG per page (painted directly; no ScrollableContainer needed).
     local page_vgs = {}
@@ -200,8 +191,8 @@ local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_sele
                         local row_i = math.floor((gy - grid_y) / cell_h)
                         local idx   = (cur_page - 1) * per_page + row_i * cols + col_i + 1
                         if idx >= 1 and idx <= #icons_list then
-                            on_select(icons_list[idx])
                             UIManager:close(dialog)
+                            on_select(icons_list[idx])
                         end
                     end
                     return true

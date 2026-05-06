@@ -9,6 +9,7 @@
 local function apply_browser_display_mode_by_path()
     local FileManager = require("apps/filemanager/filemanager")
     local FileChooser  = require("ui/widget/filechooser")
+    local ffiUtil      = require("ffi/util")
     local paths        = require("common/paths")
 
     local function is_in_home(path)
@@ -30,7 +31,10 @@ local function apply_browser_display_mode_by_path()
 
     FileChooser.changeToPath = function(self, path, ...)
         if not _switching and self.name == "filemanager" then
-            local in_home = is_in_home(path)
+            -- Resolve realpath before is_in_home: raw ".." paths like home_dir/..
+            -- still match the home prefix check and block the classic-mode switch.
+            local resolved = ffiUtil.realpath(path) or path
+            local in_home = is_in_home(resolved)
             local saved = rawget(_G, "__ZEN_PREFERRED_DISPLAY_MODE")
             local fm = FileManager.instance
             local cb = fm and fm.coverbrowser

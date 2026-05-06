@@ -169,9 +169,12 @@ local function apply_reader_clock()
         if not self._header_clock_refresh then
             self._header_clock_refresh = true
             local view = self
-            _autoRefresh = function()
+            -- _autoRefreshFn is a stable local never mutated from outside; use it for
+            -- self-rescheduling so scheduleIn never receives the mutable _autoRefresh upvalue.
+            local _autoRefreshFn
+            _autoRefreshFn = function()
                 if not (view.ui and view.ui.document) then
-                    _autoRefresh = nil
+                    _autoRefresh = nil  -- signal onResume to stop rescheduling
                     return
                 end
                 -- Only dirty the reader when it's the topmost widget; prevents
@@ -184,9 +187,10 @@ local function apply_reader_clock()
                         UIManager:setDirty(view.ui.show_parent or view.ui, "ui")
                     end
                 end
-                UIManager:scheduleIn(60, _autoRefresh)
+                UIManager:scheduleIn(60, _autoRefreshFn)
             end
-            UIManager:scheduleIn(60, _autoRefresh)
+            _autoRefresh = _autoRefreshFn
+            UIManager:scheduleIn(60, _autoRefreshFn)
 
             -- Cancel timer on suspend so it does not fire during sleep.
             local ReaderUI = require("apps/reader/readerui")
