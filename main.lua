@@ -57,6 +57,9 @@ end
 
 -- Holds the single plugin instance so the FileManagerMenu patch can reach it.
 local _zen_plugin_ref = nil
+-- Weak-keyed table of FileManagerMenu/ReaderMenu instances that have been patched,
+-- so the on_update_found callback can rebuild their tab_item_table dynamically.
+local _zen_menu_instances = setmetatable({}, { __mode = "k" })
 
 -- Defensive nil-action guard: prevent UIManager:scheduleIn/nextTick(nil) crashes.
 -- Installed once per process; logs a traceback so the real culprit can be identified.
@@ -126,6 +129,8 @@ function ZenUI:init()
     i18n.install()  -- reinstall after any context-switch uninstall (onCloseWidget removes it)
     self.config = ConfigManager.load()
     _zen_plugin_ref = self
+    -- Load cached update state now so has_update() is correct when the menu first opens.
+    zen_updater.init_banner()
 
     -- Run incompatible-plugin detection before ANY module or patch loads.
     do
@@ -300,11 +305,13 @@ function ZenUI:init()
         local is_update = from_updater
             or (type(shown_ver) == "string" and shown_ver ~= current_ver)
 
+        local update_channel = G_reader_settings:readSetting("zen_ui_update_channel") or "stable"
         logger.info("ZenUI quickstart check: current_ver=", current_ver,
             "shown_ver=", tostring(shown_ver),
             "just_updated_ver=", tostring(just_updated_ver),
             "from_updater=", from_updater,
-            "is_update=", is_update)
+            "is_update=", is_update,
+            "channel=", update_channel)
         if shown_ver == false then
             local ok_pages, pages_mod = pcall(require, "common/quickstart_pages")
             if ok_pages then
@@ -446,6 +453,7 @@ function ZenUI:init()
                     break
                 end
             end
+            _zen_menu_instances[m_self] = true
             -- Insert Zen UI tab right after quicksettings.
             local zen_items = zen_settings.build(_zen_plugin_ref).sub_item_table
             -- Hide the zen tab if lockdown hides the settings panel.
@@ -454,7 +462,9 @@ function ZenUI:init()
             local _panel_hidden = type(_lc) == "table" and _lc.disable_settings_panel == true
                 and type(_ft) == "table" and _ft.lockdown_mode == true
             if not _panel_hidden then
-                zen_items.icon = "zen_settings"
+                zen_items.icon = zen_updater.has_update() and "zen_ui_update" or "zen_settings"
+                -- store so onShowMenu can refresh the icon on every open
+                m_self._zen_tab_item = zen_items
                 local qs_pos = find_quicksettings_pos(m_self.tab_item_table)
                 local insert_pos = qs_pos and (qs_pos + 1) or 1
                 table.insert(m_self.tab_item_table, insert_pos, zen_items)
@@ -488,6 +498,17 @@ function ZenUI:init()
             end
             table.insert(m_self.tab_item_table, home_tab)
         end
+        -- Refresh the zen tab icon on every menu open so it reflects the
+        -- current update state without needing a full tab_item_table rebuild.
+        local orig_show = menu_class.onShowMenu
+        if type(orig_show) == "function" then
+            menu_class.onShowMenu = function(m_self, ...)
+                if m_self._zen_tab_item then
+                    m_self._zen_tab_item.icon = zen_updater.has_update() and "zen_ui_update" or "zen_settings"
+                end
+                return orig_show(m_self, ...)
+            end
+        end
     end
 
     local ok_fm, FileManagerMenu = pcall(require, "apps/filemanager/filemanagermenu")
@@ -498,6 +519,16 @@ function ZenUI:init()
 
     if self.ui and self.ui.menu and self.ui.menu.registerToMainMenu then
         self.ui.menu:registerToMainMenu(self)
+    end
+
+    -- When the background check finds a new update, reset tab_item_table on all
+    -- known menu instances so setUpdateItemTable is re-run on next menu open,
+    -- showing the update icon without requiring a restart.
+    zen_updater._on_update_found = function()
+        for m_instance in pairs(_zen_menu_instances) do
+            m_instance.tab_item_table = nil
+            pcall(m_instance.setUpdateItemTable, m_instance)
+        end
     end
 
     -- Trigger background update check on fresh startup too, not only on resume.

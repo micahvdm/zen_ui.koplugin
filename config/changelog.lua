@@ -53,4 +53,16 @@ return {
         "Fixed reader menu not opening on some devices",
         "Bug fixes and performance improvements",
     },
+    ["1.2.1"] = {
+        "Update flow enhancements (abort/prompt for network)",
+        "Show a notification dot on Zen Settings icon when an update is available",
+        "Adjust Zen cover image for screensaver",
+        "Fix search (revert whole word searching)",
+        "Fix Navbar tabs not showing after updating settings",
+        "Fix unread status not fully resetting status",
+        "Fix hide list borders not applying immediately",
+        "Fix mosaic covers not showing in TBR",
+        "Fix a rare issue where duplicate items could show in status bar/navbar",
+        "Bug fixes and performance improvements",
+    },
 }

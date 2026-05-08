@@ -757,7 +757,21 @@ local function apply_browser_list_item_layout()
                 fc._zen_strip_list_borders_fn = zen_fc_updateItems
                 fc.updateItems = zen_fc_updateItems
             end
+            -- setupLayout already called updateItems before our wrapper was installed,
+            -- so strip the current item_group now (covers return-from-reader).
+            local UIManager = require("ui/uimanager")
+            stripListBorders(fc)
+            UIManager:setDirty(fc, "ui")
         end
+    end
+
+    -- Restart fix: FileManager may already be on screen before the plugin loaded.
+    -- Strip borders from the existing item_group immediately.
+    local fm = FileManager.instance
+    if fm and fm.file_chooser then
+        local UIManager = require("ui/uimanager")
+        stripListBorders(fm.file_chooser)
+        UIManager:setDirty(fm.file_chooser, "ui")
     end
 end
 

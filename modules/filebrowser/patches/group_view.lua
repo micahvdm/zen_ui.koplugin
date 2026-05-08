@@ -1862,6 +1862,10 @@ function M.showTBRView(injectNavbar)
         menu.page_info_text.hold_input = nil
     end
 
+    -- Tag TBR as a real-book-list menu so _zen_update_impl in browser_folder_cover
+    -- doesn't suppress covers the way it does for non-FM dialogs (e.g. screensaver picker).
+    menu._zen_tab_id = tab_id
+
     local mode_type = setup_display_mode(menu, false, tab_id)
     if mode_type == "mosaic" then
         patch_mosaic_item()

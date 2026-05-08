@@ -12,9 +12,22 @@ function M.deepcopy(value)
     return result
 end
 
+-- Returns true when t is a sequential array (no holes, integer keys from 1).
+local function _is_array(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n == #t
+end
+
 function M.deepmerge(dst, src)
     if type(dst) ~= "table" or type(src) ~= "table" then
         return src
+    end
+
+    -- Never merge into an existing array: arrays are treated as opaque values.
+    -- Only fill in missing keys from src when dst is a plain map.
+    if _is_array(dst) then
+        return dst
     end
 
     for k, v in pairs(src) do

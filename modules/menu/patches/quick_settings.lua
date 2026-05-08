@@ -577,10 +577,10 @@ local function apply_quick_settings()
             visible_func = function() return hasPlugin("kosync") end,
             callback = function(touch_menu)
                 touch_menu:closeMenu()
-                UIManager:broadcastEvent(Event:new("KOSyncPushProgress"))
-                -- Pull after a short delay to let the push complete first.
+                UIManager:broadcastEvent(Event:new("KOSyncPullProgress"))
+                -- Push after a short delay to let the pull complete first.
                 UIManager:scheduleIn(1, function()
-                    UIManager:broadcastEvent(Event:new("KOSyncPullProgress"))
+                    UIManager:broadcastEvent(Event:new("KOSyncPushProgress"))
                 end)
             end,
         },

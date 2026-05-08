@@ -807,7 +807,15 @@ function M.build(ctx)
             config.browser_list_item_layout.hide_list_borders =
                 not (config.browser_list_item_layout.hide_list_borders == true)
             plugin:saveConfig()
-            UIManager:setDirty(nil, "full")
+            -- updateItems rebuilds item_group so stripListBorders takes effect immediately.
+            local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
+            local fm = ok_fm and FM and FM.instance
+            if fm and fm.file_chooser and fm.file_chooser.updateItems then
+                fm.file_chooser:updateItems()
+                UIManager:setDirty(fm, "ui")
+            else
+                UIManager:setDirty(nil, "full")
+            end
         end,
     })
 

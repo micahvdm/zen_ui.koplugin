@@ -64,8 +64,19 @@ local function apply_status_bar()
         hide_browser_bar = true,
     }
 
+    local logger = require("logger")
+
+    local function _serializeOrder(t)
+        if type(t) ~= "table" then return tostring(t) end
+        return "{" .. table.concat(t, ", ") .. "}"
+    end
+
     local function loadConfig()
         local config = zen_plugin.config.status_bar or {}
+        logger.info("ZenUI [status_bar] loadConfig raw: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         -- Migration: convert old show/order/show_time format to left_order/right_order
         if config.left_order == nil and config.right_order == nil then
             local old_order = type(config.order) == "table" and config.order
@@ -102,9 +113,15 @@ local function apply_status_bar()
         -- Merge scalar defaults
         for k, v in pairs(config_default) do
             if config[k] == nil then
+                logger.info("ZenUI [status_bar] merging default for nil key:", k,
+                    "->", type(v) == "table" and _serializeOrder(v) or tostring(v))
                 config[k] = utils.deepcopy(v)
             end
         end
+        logger.info("ZenUI [status_bar] post-defaults: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         -- Validate: only known keys, no cross-side duplicates
         local seen = {}
         local function clean_order(list)
@@ -120,6 +137,10 @@ local function apply_status_bar()
         config.left_order   = clean_order(config.left_order)
         config.center_order = clean_order(config.center_order)
         config.right_order  = clean_order(config.right_order)
+        logger.info("ZenUI [status_bar] final: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         zen_plugin.config.status_bar = config
         return config
     end
@@ -847,6 +868,10 @@ local function apply_status_bar()
         if #title_group < 2 then return end
 
         local current_path = self.file_chooser and self.file_chooser.path
+        logger.info("ZenUI [status_bar] _updateStatusBar: left=",
+            _serializeOrder(config.left_order),
+            "center=", _serializeOrder(config.center_order),
+            "right=",  _serializeOrder(config.right_order))
         local status_row = createStatusRow(current_path, self)
         title_group[2] = status_row
         title_group:resetLayout()

@@ -9,7 +9,7 @@ local function apply_screensaver_cover()
         local root = require("common/plugin_root")
         if root then
             local lfs = require("libs/libkoreader-lfs")
-            local p = root .. "/icons/zen_ui.svg"
+            local p = root .. "/icons/zen_cover.svg"
             if lfs.attributes(p, "mode") == "file" then
                 _icons_dir = root .. "/icons/"
             end
@@ -29,9 +29,9 @@ local function apply_screensaver_cover()
             -- black background → white logo; white/none → dark logo.
             local bg = G_reader_settings:readSetting("screensaver_img_background")
             if bg == "black" then
-                self.image_file = utils.resolveIcon(_icons_dir, "zen_ui_light") or (_icons_dir .. "zen_ui_light.svg")
+                self.image_file = utils.resolveIcon(_icons_dir, "zen_cover_light") or (_icons_dir .. "zen_cover_light.svg")
             else
-                self.image_file = utils.resolveIcon(_icons_dir, "zen_ui") or (_icons_dir .. "zen_ui.svg")
+                self.image_file = utils.resolveIcon(_icons_dir, "zen_cover") or (_icons_dir .. "zen_cover.svg")
             end
         end
     end

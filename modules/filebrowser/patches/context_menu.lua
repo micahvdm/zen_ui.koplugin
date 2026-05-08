@@ -1449,12 +1449,17 @@ local function apply_context_menu()
                                     doc_settings:delSetting("percent_finished")
                                     doc_settings:delSetting("last_page")
                                     doc_settings:delSetting("last_xpointer")
-                                    BookList.setBookInfoCacheProperty(file, "percent_finished", nil)
                                 else
                                     summary.status = to_status
                                 end
                                 filemanagerutil.saveSummary(doc_settings, summary)
                                 BookList.setBookInfoCacheProperty(file, "status", to_status)
+                                if to_status == nil then
+                                    -- Reset cache to {been_opened=false} so hasBookInfoCache stays
+                                    -- valid and the renderer shows "New" without re-reading the sidecar.
+                                    -- Must be last: this call replaces the whole cache entry.
+                                    BookList.setBookInfoCacheProperty(file, "been_opened", false)
+                                end
                                 UIManager:close(status_dialog)
                                 refresh()
                             end

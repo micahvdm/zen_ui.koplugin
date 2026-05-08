@@ -330,7 +330,7 @@ local function buildContent(sc, rows_config, stats, page_w, h_padding)
                 card{ width=c4_w, height=c4_h, value_size=24,
                       value=formatTime(yd),                        label=_("total time") },
                 card{ width=c4_w, height=c4_h, value_size=24,
-                      value=tostring(stats.books_finished   or 0),  label=_("books finished") },
+                      value=tostring(stats.books_this_year  or 0),  label=_("books read") },
             }
         end,
         all_time = function()

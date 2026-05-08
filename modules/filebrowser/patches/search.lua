@@ -106,36 +106,9 @@ local function apply_search()
         return true
     end
 
-    -- Whole-word matching and description exclusion for Zen search
+    -- Description exclusion for metadata search
     local util = require("util")
-    local str_lower = util.stringLower or string.lower  -- util.stringLower added in newer KOReader
     local DocumentRegistry = require("document/documentregistry")
-
-    local function find_whole_word(text, pattern)
-        -- Word char: ASCII alnum/_ OR any byte ≥ 128 (part of a UTF-8 multibyte sequence,
-        -- i.e. any non-ASCII character: Cyrillic, CJK, Arabic, accented Latin, etc.)
-        local function is_word_byte(b)
-            return (b >= 48 and b <= 57)
-                or (b >= 65 and b <= 90)
-                or (b >= 97 and b <= 122)
-                or b == 95
-                or b >= 128
-        end
-        local start = 1
-        while true do
-            local s, e = string.find(text, pattern, start)
-            if not s then return false end
-            local before_ok = (s == 1) or not is_word_byte(text:byte(s - 1))
-            local after_ok  = (e == #text) or not is_word_byte(text:byte(e + 1))
-            if before_ok and after_ok then return true end
-            start = s + 1
-        end
-    end
-
-    -- Replace hyphens, en-dashes, underscores with spaces so "moby dick" matches "moby-dick".
-    local function normalize_for_search(s)
-        return s:gsub("[%-%_\u{2013}\u{2014}]", " ")
-    end
 
     local orig_isFileMatch = FileManagerFileSearcher.isFileMatch
 
@@ -146,21 +119,23 @@ local function apply_search()
         if search_string == "*" then
             return true
         end
-        local norm_search = normalize_for_search(search_string)
-        -- Filename: whole-word, always case-insensitive
-        if find_whole_word(normalize_for_search(str_lower(filename)), norm_search) then
+        -- search_string arrives pre-lowercased and pattern-escaped from getList()
+        -- use util.stringLower (UTF-8 aware) to match stock behavior for all scripts
+        local fname = self.case_sensitive and filename or util.stringLower(filename)
+        if string.find(fname, search_string) then
             return true
         end
-        -- Metadata: skip description, whole-word matching
+        -- Metadata: same as stock findInProps but skip description
         if self.include_metadata and is_file and DocumentRegistry:hasProvider(fullpath) then
             local book_props = self.ui.bookinfo:getDocProps(fullpath, nil, true)
             if next(book_props) ~= nil then
                 local props = {"title", "authors", "series", "series_index", "language", "keywords"}
-                for _, key in ipairs(props) do
+                for _i, key in ipairs(props) do
                     local prop = book_props[key]
                     if prop then
                         if key == "series_index" then prop = tostring(prop) end
-                        if find_whole_word(normalize_for_search(str_lower(prop)), norm_search) then
+                        local haystack = self.case_sensitive and prop or util.stringLower(prop)
+                        if string.find(haystack, search_string) then
                             return true
                         end
                     end
