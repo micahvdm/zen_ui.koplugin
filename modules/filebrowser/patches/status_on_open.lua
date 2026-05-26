@@ -1,0 +1,32 @@
+-- zen_ui: status_on_open patch
+-- Updates a new or abandoned book's status to "reading" immediately upon opening it
+-- from the file manager.
+
+local function apply_status_on_open()
+    local ok_util, filemanagerutil = pcall(require, "apps/filemanager/filemanagerutil")
+    if not ok_util or type(filemanagerutil.openFile) ~= "function" then
+        return
+    end
+
+    local _orig_openFile = filemanagerutil.openFile
+
+    filemanagerutil.openFile = function(ui, file, caller_pre_callback, no_dialog)
+        local DocSettings = require("docsettings")
+        local BookList = require("ui/widget/booklist")
+
+        -- Safely open doc settings for this file, without creating sidecar files unnecessarily yet?
+        -- Well, if it's being opened, it will create one anyway.
+        local doc_settings = DocSettings:open(file)
+        local summary = doc_settings:readSetting("summary") or {}
+
+        if not summary.status or summary.status == "new" or summary.status == "abandoned" then
+            summary.status = "reading"
+            filemanagerutil.saveSummary(doc_settings, summary)
+            BookList.setBookInfoCacheProperty(file, "status", "reading")
+        end
+
+        return _orig_openFile(ui, file, caller_pre_callback, no_dialog)
+    end
+end
+
+return apply_status_on_open

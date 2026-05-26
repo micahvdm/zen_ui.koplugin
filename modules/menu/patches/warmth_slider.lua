@@ -21,6 +21,7 @@ local UIManager       = require("ui/uimanager")
 local VerticalGroup   = require("ui/widget/verticalgroup")
 local VerticalSpan    = require("ui/widget/verticalspan")
 local ZenSlider       = require("common/zen_slider")
+local library_font    = require("common/library_font")
 local _               = require("gettext")
 local Screen          = Device.screen
 
@@ -126,7 +127,7 @@ local function build_warmth_slider(touch_menu, opts)
 
     local nl_minus = Button:new{
         text           = "−",
-        text_font_face = "infofont",
+        text_font_face = library_font.getFontName(),
         text_font_size = small_btn_size,
         text_font_bold = false,
         width          = small_btn_width,
@@ -136,7 +137,7 @@ local function build_warmth_slider(touch_menu, opts)
     }
     local nl_plus = Button:new{
         text           = "＋",
-        text_font_face = "infofont",
+        text_font_face = library_font.getFontName(),
         text_font_size = small_btn_size,
         text_font_bold = false,
         width          = small_btn_width,

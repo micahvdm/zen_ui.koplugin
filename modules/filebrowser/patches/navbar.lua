@@ -18,6 +18,7 @@ local function apply_navbar()
     local UIManager = require("ui/uimanager")
     local VerticalGroup = require("ui/widget/verticalgroup")
     local VerticalSpan = require("ui/widget/verticalspan")
+    local library_font = require("common/library_font")
     local utils = require("common/utils")
     local paths = require("common/paths")
     local Screen = Device.screen
@@ -43,8 +44,6 @@ local function apply_navbar()
     -- === Layout constants ===
 
     local navbar_icon_size = Screen:scaleBySize(34)
-    local navbar_font = Font:getFace("smallinfofont", 20)
-    local navbar_font_bold = Font:getFace("smallinfofontbold", 20)
     local navbar_v_padding = Screen:scaleBySize(4)
     -- Dead zone at left/right edges to avoid stealing corner gesture taps
     local corner_dead_zone = math.floor(Screen:getWidth() / 20)
@@ -594,10 +593,10 @@ local function apply_navbar()
     -- Uses the bold face as the worst-case width so all tabs stay at the same size.
     local function getSharedFontSize(labels, max_w)
         for _, size in ipairs(navbar_font_size_steps) do
-            local bold_face = Font:getFace("smallinfofontbold", size)
+            local face = library_font.getFace(size)
             local all_fit = true
             for _, text in ipairs(labels) do
-                local probe = TextWidget:new{ text = text, face = bold_face }
+                local probe = TextWidget:new{ text = text, face = face, bold = true }
                 local fits = probe:getSize().w <= max_w
                 probe:free()
                 if not fits then all_fit = false; break end
@@ -640,12 +639,13 @@ local function apply_navbar()
         end
 
         local size = font_size or navbar_font_size_steps[1]
-        local label_face = Font:getFace(use_bold and "smallinfofontbold" or "smallinfofont", size)
+        local label_face = library_font.getFace(size)
         local label
         if active_color then
             label = ColorTextWidget:new{
                 text = tab.label,
                 face = label_face,
+                bold = use_bold,
                 max_width = label_max_w,
                 fgcolor = active_color,
             }
@@ -653,6 +653,7 @@ local function apply_navbar()
             label = TextWidget:new{
                 text = tab.label,
                 face = label_face,
+                bold = use_bold,
                 max_width = label_max_w,
             }
         end
@@ -1163,6 +1164,7 @@ local function apply_navbar()
         file_chooser._zen_navbar_key_patched = true
         local cls_kp = file_chooser.onKeyPress
         local cls_kr = file_chooser.onKeyRelease
+        local cls_ms = file_chooser.onMenuSelect
         local HOLD_DELAY = 0.4
         local _press_hold_fn = nil   -- scheduled hold callback (nil = not pending)
         local _press_ctx = nil       -- "navbar" or "filelist" when hold pending
@@ -1330,6 +1332,17 @@ local function apply_navbar()
             return cls_kr and cls_kr(fc, key)
         end
 
+        -- On non-touch, key-only devices (e.g Kindle 4 NT), Enter may be
+        -- delivered as the menu selection event for the still-selected book.
+        -- When our virtual navbar has focus, consume that path and activate the
+        -- focused tab instead, so the list's retained selection is not opened.
+        file_chooser.onMenuSelect = function(fc, item)
+            if _navbar_focused_idx then
+                activateNavbarTab(); return true
+            end
+            return cls_ms and cls_ms(fc, item)
+        end
+
         -- All d-pad moves dispatch as FocusMove events (args={dx,dy}), not onKeyPress.
         -- Patch onFocusMove to handle navbar focus cycling and last-row→navbar.
         local cls_fm = file_chooser.onFocusMove
@@ -1468,6 +1481,15 @@ local function apply_navbar()
             end
 
             -- Close this standalone view first
+            if tapped_id == "books" then
+                setActiveTab(tapped_id)
+                local cb = tab_callbacks[tapped_id]
+                if cb then cb() end
+                UIManager:close(menu)
+                if menu._zen_close_stack then menu._zen_close_stack() end
+                return true
+            end
+
             if menu.close_callback then
                 menu.close_callback()
             elseif menu.onClose then
@@ -1516,6 +1538,29 @@ local function apply_navbar()
         if Device:hasKeys() and not menu._zen_navbar_key_patched then
             menu._zen_navbar_key_patched = true
 
+            menu.key_events = menu.key_events or {}
+            menu.key_events.ZenNavbarFocusLeft = {
+                { "Left" },
+                event = "ZenNavbarFocusLeft",
+            }
+            menu.key_events.ZenNavbarFocusRight = {
+                { "Right" },
+                event = "ZenNavbarFocusRight",
+            }
+            menu.key_events.ZenNavbarFocusUp = {
+                { "Up" },
+                event = "ZenNavbarFocusUp",
+            }
+            menu.key_events.ZenNavbarFocusDown = {
+                { "Down" },
+                event = "ZenNavbarFocusDown",
+            }
+            menu.key_events.ZenNavbarConfirm = {
+                { "Press" },
+                { "Return" },
+                event = "ZenNavbarConfirm",
+            }
+
             local function repaintStandaloneNavbar()
                 local saved_active = active_tab
                 active_tab = view_tab_id
@@ -1545,6 +1590,14 @@ local function apply_navbar()
                 if tapped_id == view_tab_id then
                     menu.page = 1; menu:updateItems(); return
                 end
+                if tapped_id == "books" then
+                    setActiveTab(tapped_id)
+                    local cb = tab_callbacks[tapped_id]
+                    if cb then cb() end
+                    UIManager:close(menu)
+                    if menu._zen_close_stack then menu._zen_close_stack() end
+                    return
+                end
                 if menu.close_callback then menu.close_callback()
                 elseif menu.onClose then menu:onClose()
                 else UIManager:close(menu) end
@@ -1554,11 +1607,7 @@ local function apply_navbar()
                 if cb then cb() end
             end
 
-            -- D-pad moves arrive as FocusMove events, not onKeyPress.
-            local cls_sfm = menu.onFocusMove
-            menu.onFocusMove = function(m, args)
-                local dx = args and args[1] or 0
-                local dy = args and args[2] or 0
+            local function moveStandaloneNavbar(m, dx, dy)
                 local vis_tabs = getVisibleTabs()
                 local n = #vis_tabs
                 if n > 0 then
@@ -1575,12 +1624,44 @@ local function apply_navbar()
                         end
                         return true
                     end
-                    if dy == 1 and m.selected and m.layout
-                            and not m.layout[m.selected.y + 1] then
+                    if dy == 1 and (not m.selected or not m.layout
+                            or not m.layout[m.selected.y + 1]) then
                         focusStandaloneNavbar(vis_tabs)
                         repaintStandaloneNavbar(); return true
                     end
                 end
+                return false
+            end
+
+            function menu:onZenNavbarFocusLeft()
+                return moveStandaloneNavbar(self, -1, 0)
+            end
+
+            function menu:onZenNavbarFocusRight()
+                return moveStandaloneNavbar(self, 1, 0)
+            end
+
+            function menu:onZenNavbarFocusUp()
+                return moveStandaloneNavbar(self, 0, -1)
+            end
+
+            function menu:onZenNavbarFocusDown()
+                return moveStandaloneNavbar(self, 0, 1)
+            end
+
+            function menu:onZenNavbarConfirm()
+                if _navbar_focused_idx then
+                    activateStandaloneTab(); return true
+                end
+                return false
+            end
+
+            -- D-pad moves arrive as FocusMove events, not onKeyPress.
+            local cls_sfm = menu.onFocusMove
+            menu.onFocusMove = function(m, args)
+                local dx = args and args[1] or 0
+                local dy = args and args[2] or 0
+                if moveStandaloneNavbar(m, dx, dy) then return true end
                 return cls_sfm and cls_sfm(m, args)
             end
 
@@ -1702,9 +1783,18 @@ local function apply_navbar()
     -- covers_fullscreen) and never paints the FM books view at all -- no flash, no artifacts.
     local orig_showFiles = FileManager.showFiles
     function FileManager:showFiles(path, focused_file, selected_files)
-        -- When restore is disabled, drop focused_file so KOReader doesn't scroll
-        -- the file browser to the page containing the last-opened book.
+        -- When restore is disabled, open at library root immediately (no double render).
         local effective_focused = is_restore_enabled() and focused_file or nil
+        if not is_restore_enabled() then
+            local home_dir = require("common/paths").getHomeDir()
+            if home_dir then
+                path = home_dir
+                -- reset saved scroll position so page 1 is shown
+                if self.file_chooser and self.file_chooser.path_items then
+                    self.file_chooser.path_items[home_dir] = nil
+                end
+            end
+        end
         orig_showFiles(self, path, effective_focused, selected_files)
         local state = rawget(_G, "__ZEN_UI_LIBRARY_STATE")
         if not is_restore_enabled() then

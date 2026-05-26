@@ -21,6 +21,7 @@ local function apply_browser_cover_badges()
     local ReadCollection = require("readcollection")
     local Screen         = require("device").screen
     local TextWidget     = require("ui/widget/textwidget")
+    local book_status    = require("common/book_status")
     local utils          = require("common/utils")
     local _              = require("gettext")
 
@@ -31,12 +32,12 @@ local function apply_browser_cover_badges()
     local function paintPentagon(bb, bx, by, bw, bh, color)
         local rect_h = math.floor(bh * 30 / 42)
         local tip_h  = bh - rect_h
-        bb:paintRect(bx, by, bw, rect_h, color)
+        bb:paintRectRGB32(bx, by, bw, rect_h, color)
         for row = 0, tip_h - 1 do
-            local frac = (row + 1) / tip_h          -- 0 → 1 as we approach the tip
+            local frac = (row + 1) / tip_h          -- 0 -> 1 as we approach the tip
             local rw   = math.max(2, math.floor(bw * (1 - frac)))
             local rx   = bx + math.floor((bw - rw) / 2)
-            bb:paintRect(rx, by + rect_h + row, rw, 1, color)
+            bb:paintRectRGB32(rx, by + rect_h + row, rw, 1, color)
         end
     end
 
@@ -49,7 +50,7 @@ local function apply_browser_cover_badges()
             if steps == 0 then steps = 1 end
             for i = 0, steps do
                 local t = i / steps
-                bb:paintRect(
+                bb:paintRectRGB32(
                     math.floor(x0 + t * (x1 - x0)),
                     math.floor(y0 + t * (y1 - y0)),
                     tk, tk, color)
@@ -67,15 +68,17 @@ local function apply_browser_cover_badges()
         drawLine(lx1, ly1, rx1, ry1)
     end
 
-    -- Draw a filled circle using scanline paintRect.
+    -- Draw a filled circle using scanline fill.
     local function paintCircle(bb, cx, cy, r, color)
         for row = -r, r do
             local half_w = math.floor(math.sqrt(math.max(0, r * r - row * row)))
             if half_w > 0 then
-                bb:paintRect(cx - half_w, cy + row, 2 * half_w, 1, color)
+                bb:paintRectRGB32(cx - half_w, cy + row, 2 * half_w, 1, color)
             end
         end
     end
+
+    local _banner_cache = {}
 
     -- Diagonal ribbon banner across the top-right corner.
     -- Renders a narrow band at 45 degrees with label text rotated inside it.
@@ -90,40 +93,52 @@ local function apply_browser_cover_badges()
         local th = band_thick
         if tw <= 0 or th <= 0 then return end
 
-        local tmp = Blitbuffer.new(tw, th, bb:getType())
-        if not tmp then return end
+        local bb_type = bb:getType()
+        -- Use actual RGB bytes so distinct colors don't collide in the cache.
+        local _fc = fill_color:getColorRGB32()
+        local cache_key = string.format("%d|%d|%d|%s|%d|%d|%d|%d|%d",
+            tw, th, bb_type, label, font_sz,
+            _fc.r, _fc.g, _fc.b, border_color:getColor8().a)
+        local tmp = _banner_cache[cache_key]
 
-        -- 1px border on long edges, fill_color interior
-        tmp:fill(border_color)
-        local bw = 1
-        if bw * 2 < th then
-            tmp:paintRect(0, bw, tw, th - 2 * bw, fill_color)
+        if not tmp then
+            tmp = Blitbuffer.new(tw, th, bb_type)
+            if not tmp then return end
+
+            -- 1px border on long edges, fill_color interior
+            tmp:paintRectRGB32(0, 0, tw, th, border_color)
+            local bw = 1
+            if bw * 2 < th then
+                tmp:paintRectRGB32(0, bw, tw, th - 2 * bw, fill_color)
+            end
+
+            -- Render text; step font down 1pt at a time until it fits, min 6pt
+            local inner_h = math.max(1, th - bw * 2)
+            local max_w   = math.floor(tw * 0.82)
+            local lbl, lsz
+            local fs = font_sz
+            repeat
+                if lbl and lbl.free then lbl:free() end
+                lbl = TextWidget:new{
+                    text    = label,
+                    face    = Font:getFace("cfont", fs),
+                    bold    = true,
+                    fgcolor = border_color,
+                    padding = 0,
+                }
+                lsz = lbl:getSize()
+                if lsz.w <= max_w and lsz.h <= inner_h then break end
+                fs = fs - 1
+            until fs < 6
+            -- If still too large at minimum size, let it clip rather than disappear
+            -- Clamp offsets: glyph metrics may exceed font_sz (line spacing etc.)
+            local lx = math.max(0, math.floor((tw - lsz.w) / 2))
+            local ly = math.max(0, math.floor((th - lsz.h) / 2))
+            lbl:paintTo(tmp, lx, ly)
+            if lbl.free then lbl:free() end
+
+            _banner_cache[cache_key] = tmp
         end
-
-        -- Render text; step font down 1pt at a time until it fits, min 6pt
-        local inner_h = math.max(1, th - bw * 2)
-        local max_w   = math.floor(tw * 0.82)
-        local lbl, lsz
-        local fs = font_sz
-        repeat
-            if lbl and lbl.free then lbl:free() end
-            lbl = TextWidget:new{
-                text    = label,
-                face    = Font:getFace("cfont", fs),
-                bold    = true,
-                fgcolor = border_color,
-                padding = 0,
-            }
-            lsz = lbl:getSize()
-            if lsz.w <= max_w and lsz.h <= inner_h then break end
-            fs = fs - 1
-        until fs < 6
-        -- If still too large at minimum size, let it clip rather than disappear
-        -- Clamp offsets: glyph metrics may exceed font_sz (line spacing etc.)
-        local lx = math.max(0, math.floor((tw - lsz.w) / 2))
-        local ly = math.max(0, math.floor((th - lsz.h) / 2))
-        lbl:paintTo(tmp, lx, ly)
-        if lbl.free then lbl:free() end
 
         -- Destination-driven inverse-map: for each screen pixel in the ribbon's
         -- bounding box, reverse-rotate to find the source pixel in tmp.
@@ -150,8 +165,6 @@ local function apply_browser_cover_badges()
                 end
             end
         end
-
-        tmp:free()
     end
 
 
@@ -173,36 +186,72 @@ local function apply_browser_cover_badges()
         local orig_paintTo = MosaicMenuItem.paintTo
         if not orig_paintTo then return end
 
+        local orig_update = MosaicMenuItem.update
+        if orig_update then
+            function MosaicMenuItem:update(...)
+                orig_update(self, ...)
+                if self.is_go_up or (not self.filepath) then return end
+
+                local show_fav_badge = _plugin
+                    and _plugin.config
+                    and type(_plugin.config.browser_cover_badges) == "table"
+                    and _plugin.config.browser_cover_badges.show_favorite_badge == true
+
+                if show_fav_badge and self.menu and self.menu.name ~= "collections" then
+                    self._zen_is_fav = ReadCollection:isFileInCollections(self.filepath, true)
+                else
+                    self._zen_is_fav = false
+                end
+            end
+        end
+
+        -- Walk the orig_paintTo upvalue chain to find the function that owns
+        -- corner_mark_size (KOReader's real paintTo), skipping any Zen UI wrappers.
+        local function get_real_paintTo(fn)
+            if type(fn) ~= "function" then return fn end
+            local inner
+            for i = 1, 128 do
+                local name, val = debug.getupvalue(fn, i)
+                if not name then break end
+                if name == "corner_mark_size" then return fn end
+                if not inner and name == "orig_paintTo" and type(val) == "function" then
+                    inner = val
+                end
+            end
+            return inner and get_real_paintTo(inner) or fn
+        end
+        local real_paintTo = get_real_paintTo(orig_paintTo)
 
         -- Build upvalue name→index map once at patch time for fast runtime reads.
         local uv_idx = {}
         for i = 1, 256 do
-            local name = debug.getupvalue(orig_paintTo, i)
+            local name = debug.getupvalue(real_paintTo, i)
             if not name then break end
             uv_idx[name] = i
         end
         local function uv(name)
             local idx = uv_idx[name]
             if not idx then return nil end
-            local _, v = debug.getupvalue(orig_paintTo, idx)
+            local _, v = debug.getupvalue(real_paintTo, idx)
             return v
         end
 
-        -- Cached star.empty icon for the favorite badge.
-        local IconWidget   = require("ui/widget/iconwidget")
-        local fav_mark     = nil
+        -- Cached star glyph for the favorite badge.
+        local fav_mark      = nil
         local fav_mark_size = 0
+        local fav_mark_dark = nil
 
-        local function get_fav_mark(size)
-            if fav_mark and fav_mark_size == size then return fav_mark end
+        local function get_fav_mark(size, is_dark)
+            if fav_mark and fav_mark_size == size and fav_mark_dark == is_dark then return fav_mark end
             if fav_mark and fav_mark.free then fav_mark:free() end
-            fav_mark = IconWidget:new{
-                icon   = "star.empty",
-                width  = size,
-                height = size,
-                alpha  = true,
+            fav_mark = TextWidget:new{
+                text    = "\u{2606}",  -- ☆ outline star
+                face    = Font:getFace("cfont", math.max(6, math.floor(size * 0.45))),
+                fgcolor = is_dark and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK,
+                padding = 0,
             }
             fav_mark_size = size
+            fav_mark_dark = is_dark
             return fav_mark
         end
 
@@ -220,13 +269,26 @@ local function apply_browser_cover_badges()
         end
         local _badges_log_done = false
         local _badges_target_log_done = false
+        local _badges_target_missing_log_done = false
         function MosaicMenuItem:paintTo(bb, x, y)
             -- _zen_tab_id: group view detail menus; _zen_coll_list: collections; history by name.
+            local is_search = self.menu and self.menu.name == "filesearcher"
+            local is_collection = self.menu and self.menu._zen_coll_list
+
             local _is_fm = self.menu and (
                 self.menu.name == "filemanager"
                 or self.menu.name == "history"
                 or self.menu._zen_tab_id
-                or self.menu._zen_coll_list)
+                or self.menu._zen_coll_list
+                or is_collection
+                    or is_search)
+
+            local is_selected = _is_fm and (self.dim or (self.entry and self.entry.dim))
+            local pre_target = self._cover_frame or (self[1] and self[1][1] and self[1][1][1])
+            if pre_target then
+                pre_target.dim = is_selected and true or nil
+                pre_target.color = is_selected and Blitbuffer.COLOR_DARK_GRAY or nil
+            end
             -- Clear the full cell to white before painting so that portrait
             -- covers (which are narrower than the cell) don't leave ghost pixels
             -- from a previously painted full-width placeholder in the margins.
@@ -254,12 +316,17 @@ local function apply_browser_cover_badges()
             end
 
             -- Resolve inner cover-frame sub-widget and current mark size
-            local target = self[1] and self[1][1] and self[1][1][1]
+            -- Resolve inner cover-frame sub-widget
+            local target = pre_target or (self[1] and self[1][1] and self[1][1][1])
+
             if not (target and target.dimen and target.dimen.y) then
-                local logger = require("logger")
-                logger.dbg("zen-ui:browser_cover_badges:paintTo: target not found, self[1]=",
-                    tostring(self[1] ~= nil), "self[1][1]=", tostring(self[1] and self[1][1] ~= nil),
-                    "self[1][1][1]=", tostring(self[1] and self[1][1] and self[1][1][1] ~= nil))
+                if not _badges_target_missing_log_done then
+                    _badges_target_missing_log_done = true
+                    local logger = require("logger")
+                    logger.dbg("zen-ui:browser_cover_badges:paintTo: target not found, self[1]=",
+                        tostring(self[1] ~= nil), "self[1][1]=", tostring(self[1] and self[1][1] ~= nil),
+                        "self[1][1][1]=", tostring(self[1] and self[1][1] and self[1][1][1] ~= nil))
+                end
                 return
             end
             do
@@ -278,6 +345,15 @@ local function apply_browser_cover_badges()
             local border = target.bordersize or 0
             local _badge_scale = get_badge_scale()
             local in_fm = _is_fm
+            local _bc = _plugin and type(_plugin.config) == "table"
+                and type(_plugin.config.browser_cover_badges) == "table"
+                and _plugin.config.browser_cover_badges.badge_color
+            local badge_is_dark = type(_bc) == "table" and _bc[1] == 0 and _bc[2] == 0 and _bc[3] == 0
+            local badge_fg = badge_is_dark and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
+
+            local cover_left = x + math.floor((self.width - target.dimen.w) / 2)
+            local cov_w = target.dimen.w - 2 * border
+            local cov_h = target.dimen.h - 2 * border
 
             -- Dim finished books: lighten cover toward white so it visually recedes.
             local dim_finished = in_fm and _plugin
@@ -285,11 +361,8 @@ local function apply_browser_cover_badges()
                 and type(_plugin.config.browser_cover_badges) == "table"
                 and _plugin.config.browser_cover_badges.dim_finished_books == true
                 and self.status == "complete"
-            if dim_finished then
-                local cover_left = x + math.floor((self.width - target.dimen.w) / 2)
-                local cov_w = target.dimen.w - 2 * border
-                local cov_h = target.dimen.h - 2 * border
-                if cov_w > 0 and cov_h > 0 then
+            if cov_w > 0 and cov_h > 0 then
+                if dim_finished then
                     bb:lightenRect(cover_left + border, target.dimen.y + border, cov_w, cov_h, 0.4)
                 end
             end
@@ -302,10 +375,10 @@ local function apply_browser_cover_badges()
             if show_fav_badge
                 and self.filepath
                 and self.menu.name ~= "collections"
-                and ReadCollection:isFileInCollections(self.filepath, true)
+                and self._zen_is_fav
             then
                 local eff_corner = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14)) * _badge_scale)
-                local r      = math.floor(eff_corner / 2)
+                local r = math.floor(eff_corner * 0.45)
                 -- Center on the 45-deg diagonal from the corner.
                 local inset = utils.getBadgeInset(r)
                 local cx, cy
@@ -318,15 +391,15 @@ local function apply_browser_cover_badges()
                     cx = cover_left + border + r + inset
                 end
                 cy = target.dimen.y + border + r + inset
-                -- Border ring then fill (same two-call pattern as series badge)
-                paintCircle(bb, cx, cy, r + 2, Blitbuffer.COLOR_BLACK)
-                paintCircle(bb, cx, cy, r,     Blitbuffer.COLOR_LIGHT_GRAY)
-                -- star.empty outline inverts correctly in night mode.
-                -- math.ceil gives symmetric placement for both even and odd sizes.
-                local mark = get_fav_mark(eff_corner)
+                -- Border ring then fill
+                paintCircle(bb, cx, cy, r + 2, badge_fg)
+                paintCircle(bb, cx, cy, r,     utils.getBadgeColor(_plugin and _plugin.config))
+                -- Pass diameter so glyph font scales with the actual circle size
+                local mark = get_fav_mark(r * 2, badge_is_dark)
+                local msz = mark:getSize()
                 mark:paintTo(bb,
-                    cx - math.ceil(eff_corner / 2),
-                    cy - math.ceil(eff_corner / 2)
+                    cx - math.ceil(msz.w / 2),
+                    cy - math.ceil(msz.h / 2)
                 )
             end
 
@@ -381,9 +454,9 @@ local function apply_browser_cover_badges()
                     -- Shift down by border thickness so border top aligns with cover top
                     local bdg_y = target.dimen.y + 2
 
-                    -- Border drawn 2px outside fill; COLOR_BLACK inverts to white in night mode
-                    paintPentagon(bb, bdg_x - 2, bdg_y - 2, bw + 4, bh + 4, Blitbuffer.COLOR_BLACK)
-                    paintPentagon(bb, bdg_x, bdg_y, bw, bh, Blitbuffer.COLOR_LIGHT_GRAY)
+                    -- Border drawn 2px outside fill; adapts to badge color
+                    paintPentagon(bb, bdg_x - 2, bdg_y - 2, bw + 4, bh + 4, badge_fg)
+                    paintPentagon(bb, bdg_x, bdg_y, bw, bh, utils.getBadgeColor(_plugin and _plugin.config))
 
                     local rect_h = math.floor(bh * 30 / 42)
                     -- Inner icon/text area with a little padding
@@ -399,38 +472,63 @@ local function apply_browser_cover_badges()
                         local sq   = math.min(icon_w, icon_h)
                         local sq_x = icon_x + math.floor((icon_w - sq) / 2)
                         local sq_y = icon_y + math.floor((icon_h - sq) / 2)
-                        paintCheck(bb, sq_x, sq_y, sq, sq, Blitbuffer.COLOR_BLACK)
+                        paintCheck(bb, sq_x, sq_y, sq, sq, badge_fg)
                     elseif do_pause then
                         local font_sz = math.max(7, math.floor(eff_size * 0.40))
-                        local tw = TextWidget:new{
-                            text    = "\u{F0150}",  -- nf-md-clock_outline
-                            face    = Font:getFace("cfont", font_sz),
-                            fgcolor = Blitbuffer.COLOR_BLACK,
-                            padding = 0,
-                        }
+                        local tw = rawget(self, "_zen_read_tw")
+                        if tw and (rawget(self, "_zen_read_fs") ~= font_sz or rawget(self, "_zen_read_dark") ~= badge_is_dark) then
+                            if tw.free then tw:free() end
+                            tw = nil
+                        end
+                        if not tw then
+                            tw = TextWidget:new{
+                                text    = "\u{F0150}",  -- nf-md-clock_outline
+                                face    = Font:getFace("cfont", font_sz),
+                                fgcolor = badge_fg,
+                                padding = 0,
+                            }
+                            rawset(self, "_zen_read_tw", tw)
+                            rawset(self, "_zen_read_fs", font_sz)
+                            rawset(self, "_zen_read_dark", badge_is_dark)
+                        end
                         local tw_sz = tw:getSize()
                         tw:paintTo(bb,
                             bdg_x + math.floor((bw     - tw_sz.w) / 2),
                             bdg_y + math.floor((rect_h - tw_sz.h) / 2)
                         )
-                        if tw.free then tw:free() end
                     else
                         local pct     = math.floor(100 * self.percent_finished)
                         local pct_str = pct .. "%"
                         local font_sz = math.max(7, math.floor(eff_size * 0.24))
-                        local tw = TextWidget:new{
-                            text    = pct_str,
-                            face    = Font:getFace("cfont", font_sz),
-                            bold    = true,
-                            fgcolor = Blitbuffer.COLOR_BLACK,
-                            padding = 0,
-                        }
+                        local tw = rawget(self, "_zen_read_tw")
+                        if tw and (rawget(self, "_zen_read_str") ~= pct_str or rawget(self, "_zen_read_fs") ~= font_sz or rawget(self, "_zen_read_dark") ~= badge_is_dark) then
+                            if tw.free then tw:free() end
+                            tw = nil
+                        end
+                        if not tw then
+                            tw = TextWidget:new{
+                                text    = pct_str,
+                                face    = Font:getFace("cfont", font_sz),
+                                bold    = true,
+                                fgcolor = badge_fg,
+                                padding = 0,
+                            }
+                            rawset(self, "_zen_read_tw", tw)
+                            rawset(self, "_zen_read_str", pct_str)
+                            rawset(self, "_zen_read_fs", font_sz)
+                            rawset(self, "_zen_read_dark", badge_is_dark)
+                        end
                         local tw_sz = tw:getSize()
                         tw:paintTo(bb,
                             bdg_x + math.floor((bw    - tw_sz.w) / 2),
                             bdg_y + math.floor((rect_h - tw_sz.h) / 2)
                         )
-                        if tw.free then tw:free() end
+                    end
+                    -- Repaint cover border so pentagon never obscures it
+                    if border > 0 then
+                        local bclr = target.bordercolor or Blitbuffer.COLOR_BLACK
+                        bb:paintRect(cover_left, target.dimen.y, target.dimen.w, border, bclr)
+                        bb:paintRect(cover_left + target.dimen.w - border, target.dimen.y, border, bh + 4, bclr)
                     end
                 end
             end
@@ -469,9 +567,7 @@ local function apply_browser_cover_badges()
                 and type(_plugin.config.browser_cover_badges) == "table"
                 and _plugin.config.browser_cover_badges.show_new_banner == true
             if show_new_banner and self.filepath and not self.is_go_up and not self.is_directory then
-                local is_new = self.percent_finished == nil
-                    and self.status ~= "complete"
-                    and self.status ~= "abandoned"
+                local is_new = book_status.isNewStatus(self.status, self.percent_finished)
                 if is_new then
                     local eff_size   = math.floor(math.max(corner_mark_size, math.floor((target.dimen.w or 0) * 0.14)) * _badge_scale)
                     local span       = math.floor(eff_size * 2.5)
@@ -483,7 +579,7 @@ local function apply_browser_cover_badges()
                         cover_left, cover_left + target.dimen.w,
                         target.dimen.y, target.dimen.h,
                         span, band_thick, _("New"), font_sz,
-                        Blitbuffer.COLOR_LIGHT_GRAY, Blitbuffer.COLOR_BLACK)
+                        utils.getBadgeColor(_plugin and _plugin.config), badge_fg)
                     -- Repaint cover border over banner so it isn't obscured
                     if border > 0 then
                         local bclr = target.bordercolor or Blitbuffer.COLOR_BLACK

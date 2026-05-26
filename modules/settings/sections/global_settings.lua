@@ -325,6 +325,23 @@ function M.build(ctx)
 
     local items = {}
 
+    -- Search section
+    table.insert(items, {
+        text = _("Search"),
+        sub_item_table = {
+            {
+                text = _("Match whole words"),
+                help_text = _("When enabled, search matches whole words only. When disabled, substring matching is used (e.g., 'fish' matches 'fishing')."),
+                checked_func = function()
+                    return not G_reader_settings:isTrue("substring_search")
+                end,
+                callback = function()
+                    G_reader_settings:flipNilOrFalse("substring_search")
+                end,
+            },
+        },
+    })
+
     -- Night mode schedule
     table.insert(items, {
         text = _("Night mode schedule"),

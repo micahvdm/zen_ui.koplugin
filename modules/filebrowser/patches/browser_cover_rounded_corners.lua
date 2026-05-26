@@ -7,6 +7,7 @@
 local function apply_browser_cover_rounded_corners()
     local Blitbuffer = require("ffi/blitbuffer")
     local Screen     = require("device").screen
+    local logger     = require("logger")
 
     -- Capture plugin reference at apply-time.
     local _plugin = rawget(_G, "__ZEN_UI_PLUGIN")
@@ -138,6 +139,7 @@ local function apply_browser_cover_rounded_corners()
             local tx, ty = target.dimen.x, target.dimen.y
             local tw, th = target.dimen.w, target.dimen.h
             local bsz    = math.max(1, target.bordersize or 0)
+
             paintCornerMasks(bb, tx, ty, tw, th, corner_radius)
             paintCornerBorderArcs(bb, tx, ty, tw, th, corner_radius, bsz, Blitbuffer.COLOR_BLACK)
         end

@@ -41,6 +41,7 @@ local PATCH_MODULES = {
     browser_display_mode_by_path = "modules/filebrowser/patches/browser_display_mode_by_path",
     search = "modules/filebrowser/patches/search",
     group_view = "modules/filebrowser/patches/group_view",
+    status_on_open = "modules/filebrowser/patches/status_on_open",
 }
 
 local function is_feature_enabled(plugin, key)
@@ -175,6 +176,11 @@ function M.init(logger, plugin)
     local group_view_fn = load_patch("group_view")
     if group_view_fn then
         run_feature(logger, plugin, "group_view", group_view_fn)
+    end
+
+    local status_on_open_fn = load_patch("status_on_open")
+    if status_on_open_fn then
+        run_feature(logger, plugin, "status_on_open", status_on_open_fn)
     end
 
     local zen_scroll_bar_fn = load_patch("zen_scroll_bar")

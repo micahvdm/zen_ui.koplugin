@@ -128,6 +128,7 @@ end
 function ZenUI:init()
     i18n.install()  -- reinstall after any context-switch uninstall (onCloseWidget removes it)
     self.config = ConfigManager.load()
+    _G.__ZEN_UI_LIBRARY_FONT_CFG = self.config and self.config.library_font or nil
     _zen_plugin_ref = self
     -- Load cached update state now so has_update() is correct when the menu first opens.
     zen_updater.init_banner()
@@ -480,6 +481,8 @@ function ZenUI:init()
                     end
                     local ui = m_self.ui
                     if not ui then return end
+                    local _feat = _zen_plugin_ref and _zen_plugin_ref.config and _zen_plugin_ref.config.features
+                    local restore = type(_feat) == "table" and _feat.restore_library_view == true
                     if ui.document then
                         local file = ui.document.file
                         ui:handleEvent(require("ui/event"):new("CloseConfigMenu"))
@@ -490,7 +493,14 @@ function ZenUI:init()
                     else
                         local fm = require("apps/filemanager/filemanager").instance
                         if fm then require("common/utils").closeWidgetsAbove(fm) end
-                        if type(ui.onHome) == "function" then
+                        if not restore then
+                            -- Go to library root (page 1), ignoring current folder depth.
+                            local home_dir = require("common/paths").getHomeDir()
+                            if fm and fm.file_chooser and home_dir then
+                                fm.file_chooser.path_items[home_dir] = nil
+                                fm.file_chooser:changeToPath(home_dir)
+                            end
+                        elseif type(ui.onHome) == "function" then
                             ui:onHome()
                         end
                     end

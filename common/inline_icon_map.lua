@@ -60,6 +60,7 @@ return {
     download     = "\u{F01DA}",  -- mdi-download
     add          = "\u{F067}",   -- nf-fa-plus
     filter       = "\u{F0233}",  -- mdi-filter-variant
+    refresh      = "\u{F0450}",  -- mdi-refresh
 
     -- status bar (status_bar.lua)
     wifi_on      = "\u{ECA8}",   -- nf-md-wifi

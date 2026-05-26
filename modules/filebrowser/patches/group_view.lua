@@ -1,4 +1,6 @@
 local logger = require("logger")
+local ConfigManager = require("config/manager")
+local book_status = require("common/book_status")
 
 local M = {}
 
@@ -17,6 +19,85 @@ local _detail_menus = {}
 -- Set during apply (called at init while __ZEN_UI_PLUGIN is set)
 local _zen_shared    = nil
 local _zen_plugin    = nil  -- captured at init; __ZEN_UI_PLUGIN is cleared after init
+
+local function load_zen_config()
+    if _zen_plugin and type(_zen_plugin.config) == "table" then
+        return _zen_plugin.config
+    end
+    local ok, cfg = pcall(ConfigManager.load)
+    if ok and type(cfg) == "table" then
+        return cfg
+    end
+end
+
+local function save_zen_config(cfg)
+    if type(cfg) ~= "table" then return end
+    if _zen_plugin and _zen_plugin.config == cfg and type(_zen_plugin.saveConfig) == "function" then
+        _zen_plugin:saveConfig()
+        return
+    end
+    pcall(ConfigManager.save, cfg)
+    if _zen_plugin and type(_zen_plugin.config) == "table" then
+        _zen_plugin.config = cfg
+    end
+end
+
+local function get_group_display_mode(tab_id, fallback)
+    local cfg = load_zen_config()
+    local group_view = cfg and cfg.group_view
+    local display_mode = group_view and group_view.display_mode
+    local stored = display_mode and display_mode[tab_id]
+    if type(stored) == "string" and stored ~= "" then
+        return stored
+    end
+    local g_settings = rawget(_G, "G_reader_settings")
+    local legacy = g_settings and g_settings:readSetting("zen_" .. tab_id .. "_display_mode")
+    if type(legacy) == "string" and legacy ~= "" then
+        return legacy
+    end
+    return fallback
+end
+
+local function set_group_display_mode(tab_id, mode)
+    if type(mode) ~= "string" or mode == "" then return end
+    local cfg = load_zen_config()
+    if type(cfg) ~= "table" then return end
+    if type(cfg.group_view) ~= "table" then cfg.group_view = {} end
+    if type(cfg.group_view.display_mode) ~= "table" then cfg.group_view.display_mode = {} end
+    cfg.group_view.display_mode[tab_id] = mode
+    save_zen_config(cfg)
+end
+
+local function get_detail_collate(tab_id, group_name, fallback)
+    local cfg = load_zen_config()
+    local group_view = cfg and cfg.group_view
+    local detail_collate = group_view and group_view.detail_collate
+    local tab_collate = detail_collate and detail_collate[tab_id]
+    local stored = tab_collate and tab_collate[group_name]
+    if type(stored) == "string" and stored ~= "" then
+        return stored
+    end
+    local g_settings = rawget(_G, "G_reader_settings")
+    local legacy_key = "zen_" .. tab_id .. "_detail_collate_" .. group_name
+    local legacy = g_settings and g_settings:readSetting(legacy_key)
+    if type(legacy) == "string" and legacy ~= "" then
+        return legacy
+    end
+    return fallback
+end
+
+local function set_detail_collate(tab_id, group_name, collate)
+    if type(collate) ~= "string" or collate == "" then return end
+    local cfg = load_zen_config()
+    if type(cfg) ~= "table" then return end
+    if type(cfg.group_view) ~= "table" then cfg.group_view = {} end
+    if type(cfg.group_view.detail_collate) ~= "table" then cfg.group_view.detail_collate = {} end
+    if type(cfg.group_view.detail_collate[tab_id]) ~= "table" then
+        cfg.group_view.detail_collate[tab_id] = {}
+    end
+    cfg.group_view.detail_collate[tab_id][group_name] = collate
+    save_zen_config(cfg)
+end
 
 -- True when up-folder items should be shown (mirrors browser_hide_up_folder config).
 local function should_show_up_folder()
@@ -54,9 +135,7 @@ local function setup_display_mode(menu, is_group_view, tab_id)
     end
     local display_mode
     if tab_id then
-        local g_settings = rawget(_G, "G_reader_settings")
-        display_mode = g_settings and g_settings:readSetting("zen_" .. tab_id .. "_display_mode")
-            or "list_image_meta"
+        display_mode = get_group_display_mode(tab_id, "list_image_meta")
     else
         display_mode = BookInfoManager:getSetting("filemanager_display_mode")
     end
@@ -150,6 +229,7 @@ local function patch_mosaic_item()
     _mosaic_item_patched = true
 
     local BookInfoManager = require("bookinfomanager")
+    local CoverUtils      = require("common/cover_utils")
 
     -- Keep underlines hidden on focus (same guard as collections.lua)
     local Blitbuffer_uc = require("ffi/blitbuffer")
@@ -185,10 +265,11 @@ local function patch_mosaic_item()
                 local max_w    = self.width  - 2 * border
                 local bh       = self.height - 2 * border
                 local pw, ph
-                if bh * 2 <= max_w * 3 then
-                    ph = bh; pw = math.floor(bh * 2 / 3)
+                local _ratio = CoverUtils.getRatio()
+                if bh * _ratio <= max_w then
+                    ph = bh; pw = math.floor(bh * _ratio)
                 else
-                    pw = max_w; ph = math.min(math.floor(max_w * 3 / 2), bh)
+                    pw = max_w; ph = math.min(math.floor(max_w / _ratio), bh)
                 end
                 local frame = FrameContainer2:new{
                     padding = 0, bordersize = border,
@@ -227,9 +308,23 @@ local function patch_mosaic_item()
 
         local files      = self.entry._zen_files
         local book_count = #files
-        local is_gallery = BookInfoManager:getSetting("folder_gallery_mode")
-        local max_covers = is_gallery and 4 or 1
-        local covers     = {}
+        local mode, max_covers = CoverUtils.getMode()
+        local is_gallery = mode == "gallery"
+        local is_stack   = mode == "stack"
+        -- Pre-compute portrait dims for per-slot fake cover generation
+        local _Size_pre = require("ui/size")
+        local _bdr_pre  = _Size_pre.border.thin
+        local _mw_pre   = self.width  - 2 * _bdr_pre
+        local _bh_pre   = self.height - 2 * _bdr_pre
+        local _rat_pre  = CoverUtils.getRatio()
+        local _pw_pre, _ph_pre
+        if _bh_pre * _rat_pre <= _mw_pre then
+            _ph_pre = _bh_pre; _pw_pre = math.floor(_bh_pre * _rat_pre)
+        else
+            _pw_pre = _mw_pre; _ph_pre = math.min(math.floor(_mw_pre / _rat_pre), _bh_pre)
+        end
+
+        local covers = {}
         for i = 1, math.min(book_count, max_covers) do
             local bi = BookInfoManager:getBookInfo(files[i], true)
             if bi and bi.cover_bb and bi.has_cover
@@ -239,15 +334,20 @@ local function patch_mosaic_item()
                     w    = bi.cover_w,
                     h    = bi.cover_h,
                 })
+            else
+                local gen_bb, gen_w, gen_h = CoverUtils.genCover(files[i], _pw_pre, _ph_pre)
+                if gen_bb then
+                    table.insert(covers, { data = gen_bb, w = gen_w, h = gen_h })
+                end
             end
         end
 
         -- Delegate to browser_folder_cover's method when available.
-        -- Respect gallery_mode: off means single cover or no_image, not a 4-cell grid.
         if self._setFolderCover then
-            local is_gallery = BookInfoManager:getSetting("folder_gallery_mode")
             if is_gallery then
                 self:_setFolderCover{ gallery = covers, book_count = book_count }
+            elseif is_stack then
+                self:_setFolderCover{ stack = covers, book_count = book_count }
             elseif #covers > 0 then
                 self:_setFolderCover{ data = covers[1].data, w = covers[1].w, h = covers[1].h, book_count = book_count }
             else
@@ -272,12 +372,13 @@ local function patch_mosaic_item()
         local max_w  = self.width  - 2 * border
         local bh     = self.height - 2 * border
         local portrait_w, portrait_h
-        if bh * 2 <= max_w * 3 then
+        local _ratio = CoverUtils.getRatio()
+        if bh * _ratio <= max_w then
             portrait_h = bh
-            portrait_w = math.floor(bh * 2 / 3)
+            portrait_w = math.floor(bh * _ratio)
         else
             portrait_w = max_w
-            portrait_h = math.min(math.floor(max_w * 3 / 2), bh)
+            portrait_h = math.min(math.floor(max_w / _ratio), bh)
         end
 
         local sep     = 1
@@ -308,37 +409,43 @@ local function patch_mosaic_item()
             end
         end
         local dimen = { w = portrait_w + 2 * border, h = portrait_h + 2 * border }
-        local image_widget = FrameContainer:new{
-            padding = 0, bordersize = border,
-            width = dimen.w, height = dimen.h,
-            background = Blitbuffer.COLOR_LIGHT_GRAY,
-            CenterContainer:new{
-                dimen = { w = portrait_w, h = portrait_h },
-                VerticalGroup:new{
-                    HorizontalGroup:new{
-                        cells[1],
+        local image_widget
+        if is_stack then
+            local CoverUtils = require("common/cover_utils")
+            image_widget = CoverUtils.drawStack(covers, portrait_w, portrait_h, border)
+        else
+            image_widget = FrameContainer:new{
+                padding = 0, bordersize = border,
+                width = dimen.w, height = dimen.h,
+                background = Blitbuffer.COLOR_LIGHT_GRAY,
+                CenterContainer:new{
+                    dimen = { w = portrait_w, h = portrait_h },
+                    VerticalGroup:new{
+                        HorizontalGroup:new{
+                            cells[1],
+                            LineWidget:new{
+                                background = Blitbuffer.COLOR_WHITE,
+                                dimen = { w = sep, h = half_h },
+                            },
+                            cells[2],
+                        },
                         LineWidget:new{
                             background = Blitbuffer.COLOR_WHITE,
-                            dimen = { w = sep, h = half_h },
+                            dimen = { w = portrait_w, h = sep },
                         },
-                        cells[2],
-                    },
-                    LineWidget:new{
-                        background = Blitbuffer.COLOR_WHITE,
-                        dimen = { w = portrait_w, h = sep },
-                    },
-                    HorizontalGroup:new{
-                        cells[3],
-                        LineWidget:new{
-                            background = Blitbuffer.COLOR_WHITE,
-                            dimen = { w = sep, h = half_h2 },
+                        HorizontalGroup:new{
+                            cells[3],
+                            LineWidget:new{
+                                background = Blitbuffer.COLOR_WHITE,
+                                dimen = { w = sep, h = half_h2 },
+                            },
+                            cells[4],
                         },
-                        cells[4],
                     },
                 },
-            },
-            overlap_align = "center",
-        }
+                overlap_align = "center",
+            }
+        end
         local centered_top = math.floor((self.height - dimen.h) / 2)
         local widget = OverlapGroup:new{
             dimen = { w = self.width, h = self.height },
@@ -372,9 +479,11 @@ local function patch_list_item()
     local BD              = require("ui/bidi")
     local Blitbuffer      = require("ffi/blitbuffer")
     local BookInfoManager = require("bookinfomanager")
+    local CoverUtils      = require("common/cover_utils")
     local CenterContainer = require("ui/widget/container/centercontainer")
     local Device          = require("device")
     local Font            = require("ui/font")
+    local library_font    = require("common/library_font")
     local FrameContainer  = require("ui/widget/container/framecontainer")
     local HorizontalGroup = require("ui/widget/horizontalgroup")
     local HorizontalSpan  = require("ui/widget/horizontalspan")
@@ -417,26 +526,36 @@ local function patch_list_item()
         local cover_v_pad  = Screen:scaleBySize(4)  -- matches bll top+bottom padding
         local cover_zone_w = dimen_h
         local max_img      = dimen_h - 2 * border_size - 2 * cover_v_pad
-        local cover_w      = math.floor(max_img * 2 / 3)
+        local cover_w      = math.floor(max_img * CoverUtils.getRatio())
 
         local function _fontSize(nominal, max_size)
-            local fs = math.floor(nominal * dimen_h * (1 / 64) / scale_by_size)
-            if max_size and fs >= max_size then return max_size end
+            local scale = library_font.getScale(18)
+            local fs = math.floor(nominal * dimen_h * (1 / 64) / scale_by_size * scale + 0.5)
+            if max_size then
+                local max_scaled = math.max(1, math.floor(max_size * scale + 0.5))
+                if fs >= max_scaled then return max_scaled end
+            end
             return fs
         end
 
         local wleft
         if self.do_cover_image then
-            local gallery_mode = BookInfoManager:getSetting("folder_gallery_mode")
-            local max_covers   = gallery_mode and 4 or 1
+            local mode, max_covers = CoverUtils.getMode()
+            local gallery_mode = mode == "gallery"
+            local stack_mode   = mode == "stack"
             local covers       = {}
             for i = 1, #files do
                 local bi = BookInfoManager:getBookInfo(files[i], true)
                 if bi and bi.cover_bb and bi.has_cover
                         and bi.cover_fetched and not bi.ignore_cover then
                     table.insert(covers, { data = bi.cover_bb:copy() })
-                    if #covers >= max_covers then break end
+                else
+                    local gen_bb = CoverUtils.genCover(files[i], cover_w, max_img)
+                    if gen_bb then
+                        table.insert(covers, { data = gen_bb })
+                    end
                 end
+                if #covers >= max_covers then break end
             end
 
             local cover_frame
@@ -516,6 +635,13 @@ local function patch_list_item()
                         },
                     }
                 end
+            elseif stack_mode then
+                local CoverUtils = require("common/cover_utils")
+                cover_frame = CoverUtils.drawStack(covers, cover_w, max_img, border_size)
+                if #covers > 0 then
+                    self.menu._has_cover_images = true
+                    self._has_cover_image = true
+                end
             elseif #covers > 0 then
                 local bb       = covers[1].data
                 local bb_w     = bb:getWidth()
@@ -573,7 +699,7 @@ local function patch_list_item()
         local count_str = tostring(book_count) .. " " .. (book_count == 1 and "book" or "books")
         local wright_status = TextWidget:new{
             text    = count_str,
-            face    = Font:getFace("cfont", fs_meta),
+            face    = library_font.getFace(fs_meta),
             fgcolor = Blitbuffer.COLOR_GRAY_3,
             padding = 0,
         }
@@ -582,7 +708,7 @@ local function patch_list_item()
 
         local wtitle = TextBoxWidget:new{
             text      = BD.auto(display_name),
-            face      = Font:getFace("cfont", fs_title),
+            face      = library_font.getFace(fs_title),
             width     = main_w,
             height    = dimen_h,
             height_adjust = true,
@@ -809,9 +935,7 @@ local function showDisplayModeDialog(menu, tab_id)
     local ok_bim, bim = pcall(require, "bookinfomanager")
     local cur_mode
     if tab_id then
-        local g_settings = rawget(_G, "G_reader_settings")
-        cur_mode = (g_settings and g_settings:readSetting("zen_" .. tab_id .. "_display_mode"))
-            or "list_image_meta"
+        cur_mode = get_group_display_mode(tab_id, "list_image_meta")
     elseif ok_bim and bim then
         local ok3, m = pcall(function()
             return bim:getSetting("filemanager_display_mode")
@@ -821,10 +945,7 @@ local function showDisplayModeDialog(menu, tab_id)
 
     local function apply_mode(mode)
         if tab_id then
-            local g_settings = rawget(_G, "G_reader_settings")
-            if g_settings then
-                g_settings:saveSetting("zen_" .. tab_id .. "_display_mode", mode)
-            end
+            set_group_display_mode(tab_id, mode)
         else
             -- Use FM:onSetDisplayMode to update CoverBrowser state and save to BIM.
             local via_fm = false
@@ -1068,11 +1189,10 @@ local function apply_status_filter(files)
     if not ok_fc then return files end
     local status_filter = FileChooser.show_filter and FileChooser.show_filter.status
     if not status_filter then return files end
-    local ok_bl, BookList = pcall(require, "ui/widget/booklist")
-    if not ok_bl then return files end
     local filtered = {}
-    for _, fpath in ipairs(files) do
-        if status_filter[BookList.getBookStatus(fpath)] then
+    for _i, fpath in ipairs(files) do
+        local effective_status = book_status.getEffectiveStatusFromFile(fpath)
+        if status_filter[effective_status] then
             table.insert(filtered, fpath)
         end
     end
@@ -1091,7 +1211,6 @@ local function showDetailSortDialog(group_name, tab_id, menu, files)
     local ButtonDialog = require("ui/widget/buttondialog")
     local UIManager = require("ui/uimanager")
 
-    local collate_key = "zen_" .. tab_id .. "_detail_collate_" .. group_name
     local reverse_key = "zen_" .. tab_id .. "_detail_reverse_" .. group_name
     local g_settings = rawget(_G, "G_reader_settings")
     if not g_settings then return end
@@ -1104,7 +1223,7 @@ local function showDetailSortDialog(group_name, tab_id, menu, files)
     else
         default_collate = "title"
     end
-    local cur_collate = g_settings:readSetting(collate_key) or default_collate
+    local cur_collate = get_detail_collate(tab_id, group_name, default_collate)
     -- Tags: if no per-group reverse is set, fall back to the global reverse setting.
     local per_group_reverse = g_settings:readSetting(reverse_key)
     local cur_reverse
@@ -1159,7 +1278,7 @@ local function showDetailSortDialog(group_name, tab_id, menu, files)
             align    = "left",
             enabled  = not is_active,
             callback = function()
-                g_settings:saveSetting(collate_key, opt.key)
+                set_detail_collate(tab_id, group_name, opt.key)
                 UIManager:close(sort_dialog)
                 rebuildMenu(opt.key, cur_reverse)
             end,
@@ -1265,7 +1384,6 @@ local function showDetailView(group_item, injectNavbar, tab_id)
     end
 
     -- Get sort settings for this group
-    local collate_key = "zen_" .. tab_id .. "_detail_collate_" .. group_name
     local reverse_key = "zen_" .. tab_id .. "_detail_reverse_" .. group_name
     local g_settings = rawget(_G, "G_reader_settings")
     -- Series defaults to series_index; tags fall back to the global tags sort setting;
@@ -1278,7 +1396,7 @@ local function showDetailView(group_item, injectNavbar, tab_id)
     else
         default_collate = "title"
     end
-    local cur_collate = (g_settings and g_settings:readSetting(collate_key)) or default_collate
+    local cur_collate = get_detail_collate(tab_id, group_name, default_collate)
     -- For reverse: per-group key takes priority; tags fall back to global setting.
     local per_group_reverse = g_settings and g_settings:readSetting(reverse_key)
     local cur_reverse
@@ -1357,7 +1475,14 @@ local function showDetailView(group_item, injectNavbar, tab_id)
                 return
             end
             if item.path then
-                ReaderUI:showReader(item.path)
+                local FileManager = require("apps/filemanager/filemanager")
+                local fm = FileManager.instance
+                local fmu = require("apps/filemanager/filemanagerutil")
+                if fmu.openFile then
+                    fmu.openFile(fm, item.path)
+                elseif fm then
+                    fm:openFile(item.path)
+                end
             end
         end,
         onMenuHold         = function(menu_self, item)
@@ -1451,7 +1576,7 @@ local function showDetailView(group_item, injectNavbar, tab_id)
             local fm = FileManager.instance
             if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
                 fm.file_chooser:showFileDialog({
-                    _zen_group_files       = files,
+                    _zen_group_files       = sorted_files,
                     _zen_group_name        = group_name,
                     _zen_is_folder_view    = true,
                     _zen_sort_cb           = function()
@@ -1761,10 +1886,9 @@ function M.showTBRView(injectNavbar)
     local SORT_GROUP = "to_be_read"
     local group_name = _("To Be Read")
 
-    local collate_key = "zen_" .. tab_id .. "_detail_collate_" .. SORT_GROUP
     local reverse_key = "zen_" .. tab_id .. "_detail_reverse_" .. SORT_GROUP
     local g_settings  = rawget(_G, "G_reader_settings")
-    local cur_collate = g_settings and g_settings:readSetting(collate_key) or "title"
+    local cur_collate = get_detail_collate(tab_id, SORT_GROUP, "title")
     local cur_reverse = g_settings and g_settings:isTrue(reverse_key) or false
 
     local sorted_files = sortDetailFiles(files, cur_collate, cur_reverse)
@@ -1837,7 +1961,14 @@ function M.showTBRView(injectNavbar)
                 return
             end
             if item.path then
-                ReaderUI:showReader(item.path)
+                local FileManager = require("apps/filemanager/filemanager")
+                local fm = FileManager.instance
+                local fmu = require("apps/filemanager/filemanagerutil")
+                if fmu.openFile then
+                    fmu.openFile(fm, item.path)
+                elseif fm then
+                    fm:openFile(item.path)
+                end
             end
         end,
         onMenuHold         = function(menu_self, item)

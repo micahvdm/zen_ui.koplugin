@@ -1,10 +1,12 @@
 --[[
     browser_cover_mosaic_uniform.lua
-    Enforces portrait (2:3) aspect ratio on mosaic covers to prevent landscape
-    covers from rendering wider than others. Always applied.
+    Enforces portrait aspect ratio on mosaic covers to prevent landscape
+    covers from rendering wider than others. Ratio configurable via
+    uniform_cover_ratio setting (e.g., "2:3" or "3:4").
 ]]
 
 local function apply_browser_cover_mosaic_uniform()
+    local logger = require("logger")
     local Size = require("ui/size")
     local OverlapGroup = require("ui/widget/overlapgroup")
 
@@ -20,10 +22,22 @@ local function apply_browser_cover_mosaic_uniform()
     end
 
     local MosaicMenuItem = get_upvalue(MosaicMenu._updateItemsBuildUI, "MosaicMenuItem")
-    if not MosaicMenuItem then return end
+    if not MosaicMenuItem then
+        return
+    end
 
-    if MosaicMenuItem._zen_mosaic_uniform_patched then return end
+    if MosaicMenuItem._zen_mosaic_uniform_patched then
+        return
+    end
     MosaicMenuItem._zen_mosaic_uniform_patched = true
+
+    -- 辅助函数：直接从 G_reader_settings 获取比例，不依赖 _plugin
+    local function get_aspect_ratio()
+        local ratio_str = G_reader_settings:readSetting("uniform_cover_ratio") or "2:3"
+        local num, den = ratio_str:match("(%d+):(%d+)")
+        local ratio = (tonumber(num) or 2) / (tonumber(den) or 3)
+        return ratio
+    end
 
     -- Find the ImageWidget upvalue inside MosaicMenuItem.update.
     local local_ImageWidget, upvalue_idx
@@ -37,13 +51,13 @@ local function apply_browser_cover_mosaic_uniform()
         end
     end
 
-    if not local_ImageWidget or not upvalue_idx then return end
+    if not local_ImageWidget or not upvalue_idx then
+        return
+    end
 
     -- Capture cell inner dimensions per-init so the subclass can reference them.
-    -- All cells in a grid share the same size, so a module-level pair is fine.
-    local UNDERLINE_RESERVE = 6  -- px reserved so the focus underline is not obscured by the cover image
+    local UNDERLINE_RESERVE = 6
     local max_img_w, max_img_h
-    local aspect_ratio = 2 / 3  -- width / height (portrait)
     local orig_init = MosaicMenuItem.init
     function MosaicMenuItem:init()
         if self.width and self.height then
@@ -53,18 +67,16 @@ local function apply_browser_cover_mosaic_uniform()
         end
         if orig_init then orig_init(self) end
 
-        -- Per-instance paintTo override: draw the focus underline at the same
-        -- width as the constrained cover art, centered within the cell.
         local uc = self._underline_container
         if uc and not uc._zen_underline_sized then
             uc._zen_underline_sized = true
             uc.paintTo = function(this, bb, x, y)
-                -- Keep dimen in sync so setDirty uses the correct screen position.
                 this.dimen.x = x
                 this.dimen.y = y
                 OverlapGroup.paintTo(this, bb, x, y)
                 if this.color == require("ffi/blitbuffer").COLOR_WHITE then return end
                 local uw = this.dimen.w
+                local aspect_ratio = get_aspect_ratio()
                 if max_img_w and max_img_h and max_img_h > 0 then
                     if max_img_w / max_img_h > aspect_ratio then
                         uw = math.floor(max_img_h * aspect_ratio)
@@ -78,24 +90,25 @@ local function apply_browser_cover_mosaic_uniform()
         end
     end
 
-    -- StretchingImageWidget: constrain every cover to a portrait 2:3 box.
+    -- StretchingImageWidget
     local StretchingImageWidget = local_ImageWidget:extend({})
 
     StretchingImageWidget.init = function(self)
         if local_ImageWidget.init then
             local_ImageWidget.init(self)
         end
-        if not max_img_w or not max_img_h then return end
+        if not max_img_w or not max_img_h then
+            return
+        end
 
-        -- Reset any scale_factor set by the caller; we drive sizing via w/h.
         self.scale_factor = nil
 
+        local aspect_ratio = get_aspect_ratio()
+
         if max_img_w / max_img_h > aspect_ratio then
-            -- Cell is wider than 2:3 → constrain height, derive width.
             self.height = max_img_h
             self.width  = math.floor(max_img_h * aspect_ratio)
         else
-            -- Cell is taller than 2:3 → constrain width, derive height.
             self.width  = max_img_w
             self.height = math.floor(max_img_w / aspect_ratio)
         end

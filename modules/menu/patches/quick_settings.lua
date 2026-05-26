@@ -20,6 +20,7 @@ local function apply_quick_settings()
     local UIManager = require("ui/uimanager")
     local ZenSlider = require("common/zen_slider")
     local ZenToggle = require("common/zen_toggle")
+    local library_font = require("common/library_font")
     local VerticalGroup = require("ui/widget/verticalgroup")
     local VerticalSpan = require("ui/widget/verticalspan")
     local utils = require("common/utils")
@@ -693,7 +694,8 @@ local function apply_quick_settings()
         local num_buttons = #visible_buttons
         local action_btn_size = Screen:scaleBySize(64)
         local icon_size = math.floor(action_btn_size * 0.5)
-        local label_font = Font:getFace("xx_smallinfofont")
+        local label_size = Font.sizemap and Font.sizemap["xx_smallinfofont"] or 18
+        local label_font = library_font.getFace(label_size)
 
         local normal_border = Screen:scaleBySize(2)
 
@@ -738,6 +740,20 @@ local function apply_quick_settings()
                     icon,
                 },
             }
+            circle.onFocus = function(self)
+                self.invert = true
+                if self.dimen then
+                    UIManager:setDirty(nil, "ui", self.dimen)
+                end
+                return true
+            end
+            circle.onUnfocus = function(self)
+                self.invert = false
+                if self.dimen then
+                    UIManager:setDirty(nil, "ui", self.dimen)
+                end
+                return true
+            end
             local label = TextWidget:new{
                 text = label_text,
                 face = label_font,
@@ -753,6 +769,7 @@ local function apply_quick_settings()
         end
 
         local top_row = HorizontalGroup:new{ align = "center" }
+        refs.button_layout_row = {}
 
         if num_buttons > 0 then
             local btn_gap = math.floor((inner_width - num_buttons * action_btn_size) / math.max(num_buttons - 1, 1))
@@ -777,6 +794,7 @@ local function apply_quick_settings()
                         def.hold_callback(touch_menu)
                     end or nil,
                 })
+                table.insert(refs.button_layout_row, btn_circle)
 
                 table.insert(top_row, btn_widget)
                 if i < num_buttons then
@@ -787,7 +805,8 @@ local function apply_quick_settings()
 
         -- ----- Frontlight / warmth sliders -----
 
-        local medium_font     = Font:getFace("ffont")
+        local medium_size     = Font.sizemap and Font.sizemap["ffont"] or 24
+        local medium_font     = library_font.getFace(medium_size)
         local small_btn_size  = Screen:scaleBySize(14)
         local small_btn_width = Screen:scaleBySize(56)
         local toggle_width    = Screen:scaleBySize(56)
@@ -951,28 +970,31 @@ local function apply_quick_settings()
         end
         -- Register a screen-wide hold gesture for panel button hold_callbacks
         if is_enabled() then
+            -- screen_size may be nil on some devices (e.g. KindleBasic5)
+            local sw = (self.screen_size and self.screen_size.w) or Screen:getWidth()
+            local sh = (self.screen_size and self.screen_size.h) or Screen:getHeight()
             self.ges_events.HoldCloseAllMenus = {
                 GestureRange:new{
                     ges = "hold",
-                    range = Geom:new{ x = 0, y = 0, w = self.screen_size.w, h = self.screen_size.h },
+                    range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
                 }
             }
             self.ges_events.PanCloseAllMenus = {
                 GestureRange:new{
                     ges = "pan",
-                    range = Geom:new{ x = 0, y = 0, w = self.screen_size.w, h = self.screen_size.h },
+                    range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
                 }
             }
             self.ges_events.PanReleaseCloseAllMenus = {
                 GestureRange:new{
                     ges = "pan_release",
-                    range = Geom:new{ x = 0, y = 0, w = self.screen_size.w, h = self.screen_size.h },
+                    range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
                 }
             }
             self.ges_events.MultiSwipe = {
                 GestureRange:new{
                     ges = "multiswipe",
-                    range = Geom:new{ x = 0, y = 0, w = self.screen_size.w, h = self.screen_size.h },
+                    range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
                 }
             }
         end
@@ -1006,6 +1028,12 @@ local function apply_quick_settings()
                 self._qs_slider_locked = false
             end)
         end
+        -- Preserve keyboard focus position before clearing layout so toggle
+        -- callbacks can rebuild without jumping focus back to the tab bar.
+        local old_selected
+        if self.selected then
+            old_selected = { x = self.selected.x, y = self.selected.y }
+        end
         self.item_group:clear()
         self.layout = {}
         table.insert(self.item_group, self.bar)
@@ -1016,12 +1044,19 @@ local function apply_quick_settings()
         local panel = type(panel_fn) == "function" and panel_fn(self) or panel_fn
         table.insert(self.item_group, panel)
 
+        local qs_refs = self._qs_refs
+        if qs_refs and qs_refs.button_layout_row and #qs_refs.button_layout_row > 0 then
+            table.insert(self.layout, qs_refs.button_layout_row)
+        end
+
         -- Footer (no pagination)
         table.insert(self.item_group, self.footer_top_margin)
         table.insert(self.item_group, self.footer)
         self.page_info_text:setText("")
         self.page_info_left_chev:showHide(false)
         self.page_info_right_chev:showHide(false)
+        self.page_info_left_chev:enableDisable(false)
+        self.page_info_right_chev:enableDisable(false)
 
         -- Schedule 60-second status row refresh (status_bar component owns the clock)
         local _shared = zen_plugin._zen_shared
@@ -1033,7 +1068,18 @@ local function apply_quick_settings()
         local old_dimen = self.dimen:copy()
         self.dimen.w = self.width
         self.dimen.h = self.item_group:getSize().h + self.bordersize * 2 + self.padding
-        self:moveFocusTo(self.cur_tab, 1, FocusManager.NOT_FOCUS)
+        -- Restore keyboard focus to the same position after rebuild; fall
+        -- back to the tab bar only if the old slot no longer exists.
+        if old_selected then
+            local row = self.layout[old_selected.y]
+            if row and row[old_selected.x] then
+                self:moveFocusTo(old_selected.x, old_selected.y, 0)
+            else
+                self:moveFocusTo(self.cur_tab, 1, FocusManager.NOT_FOCUS)
+            end
+        else
+            self:moveFocusTo(self.cur_tab, 1, FocusManager.NOT_FOCUS)
+        end
 
         local keep_bg = old_dimen and self.dimen.h >= old_dimen.h
         UIManager:setDirty((self.is_fresh or keep_bg) and self.show_parent or "all", function()

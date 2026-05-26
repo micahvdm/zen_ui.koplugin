@@ -40,7 +40,7 @@ local defaults = {
         browser_cover_rounded_corners = true,
         browser_cover_mosaic_uniform = true,
         partial_page_repaint = false,
-        reader_clock = true,
+        reader_top_status_bar = true,
         reader_bottom_menu = false,
         night_mode_schedule = false,
         warmth_schedule     = false,
@@ -161,6 +161,10 @@ local defaults = {
         show_title  = false,
         show_author = false,
     },
+    library_font = {
+        font_face = "default",
+        font_size = 18,
+    },
     zen_scroll_bar = {
         style              = "dots",     -- "bar" | "dots" | "page_number"
         page_number_format = "total",  -- "current" | "total"
@@ -169,11 +173,15 @@ local defaults = {
     context_menu = {
         allow_delete = false,
     },
-    reader_clock = {
-        use_24h = false,
-        position = "center",
+    reader_top_status_bar = {
         font_face = "default",
         font_size = 14,
+        left_order       = {},
+        center_order     = { "time" },
+        right_order      = {},
+        separator_key    = "small-space",
+        custom_separator = "  ",
+        custom_text      = "",
     },
     reader_footer = {
         verbose_chapter_time = false,
@@ -214,6 +222,23 @@ local defaults = {
     },
     stats_page = {
         rows = { "today", "this_month", "this_year", "all_time", "library" },
+    },
+    group_view = {
+        display_mode = {
+            authors = "list_image_meta",
+            series = "list_image_meta",
+            tags = "list_image_meta",
+            to_be_read = "list_image_meta",
+        },
+        detail_collate = {
+            authors = {},
+            series = {},
+            tags = {},
+            to_be_read = {},
+        },
+    },
+    reader_page_browser = {
+        layout = "grid",
     },
     lockdown = {
         disable_context_menu      = false,

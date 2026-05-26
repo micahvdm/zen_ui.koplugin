@@ -7,6 +7,7 @@ local Font       = require("ui/font")
 local IconWidget = require("ui/widget/iconwidget")
 local RenderText = require("ui/rendertext")
 local Screen     = require("device").screen
+local library_font = require("common/library_font")
 
 local M = {}
 
@@ -32,8 +33,18 @@ local TRACK_COLOR = Blitbuffer.COLOR_LIGHT_GRAY
 local THUMB_COLOR = Blitbuffer.COLOR_BLACK
 local DOT_INACT   = Blitbuffer.COLOR_DARK_GRAY
 
-local _pn_face = Font:getFace("xx_smallinfofont")
+local _pn_face, _pn_face_key
 local _icon_l, _icon_r  -- lazy: only created when page_number style is first painted
+
+local function get_pn_face()
+    local base = Font.sizemap and Font.sizemap["xx_smallinfofont"] or 18
+    local key = library_font.getFontName() .. ":" .. tostring(base)
+    if _pn_face_key ~= key or not _pn_face then
+        _pn_face = library_font.getFace(base)
+        _pn_face_key = key
+    end
+    return _pn_face
+end
 
 local function get_pn_icons()
     if not _icon_l then
@@ -116,16 +127,17 @@ function M.paint(bb, x, y, w, h, cur_page, total_pages)
         end
 
     elseif style == "page_number" then
+        local pn_face  = get_pn_face()
         local fmt      = M.getPageFormat()
         local text_str = fmt == "total"
             and (tostring(cur_page) .. " / " .. tostring(total_pages))
             or  tostring(cur_page)
-        local text_w   = RenderText:sizeUtf8Text(0, 9999, _pn_face, text_str, true, false).x
-        local face_h   = _pn_face.bb_size or _pn_face.size or Screen:scaleBySize(10)
+        local text_w   = RenderText:sizeUtf8Text(0, 9999, pn_face, text_str, true, false).x
+        local face_h   = pn_face.bb_size or pn_face.size or Screen:scaleBySize(10)
         local base_y   = y + math.floor(h / 2 + face_h * 0.25)
         local inner_w  = w - M.CHEV_W * 2
         local text_x   = x + M.CHEV_W + math.floor((inner_w - text_w) / 2)
-        RenderText:renderUtf8Text(bb, text_x, base_y, _pn_face, text_str, false, false, THUMB_COLOR)
+        RenderText:renderUtf8Text(bb, text_x, base_y, pn_face, text_str, false, false, THUMB_COLOR)
         local icon_y = y + math.floor((h - M.PN_ICON_SZ) / 2)
         local il, ir = get_pn_icons()
         il:paintTo(bb, x + math.floor((M.CHEV_W - M.PN_ICON_SZ) / 2), icon_y)

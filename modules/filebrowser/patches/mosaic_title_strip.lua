@@ -62,16 +62,17 @@ local function apply_mosaic_title_strip()
     local Font       = require("ui/font")
     local TextWidget = require("ui/widget/textwidget")
     local BD         = require("ui/bidi")
+    local library_font = require("common/library_font")
 
-    local TITLE_FONT  = 16
-    local AUTHOR_FONT = 13
+    local TITLE_FONT  = library_font.scaleValue(16)
+    local AUTHOR_FONT = library_font.scaleValue(13)
     local PAD         = Screen:scaleBySize(3)
     local GAP         = Screen:scaleBySize(2)  -- space between title and author rows
     local PAD_H       = Screen:scaleBySize(6)  -- horizontal text margin (device constant)
 
     -- Measure actual pixel line heights for the chosen fonts at this device's DPI.
     local function measure_line_h(font_size, bold)
-        local tw = TextWidget:new{ text = "Ag", face = Font:getFace("cfont", font_size),
+        local tw = TextWidget:new{ text = "Ag", face = library_font.getFace(font_size),
             bold = bold, padding = 0 }
         local h = tw:getSize().h
         tw:free()
@@ -172,7 +173,7 @@ local function apply_mosaic_title_strip()
                     strip_bb:fill(Blitbuffer.COLOR_WHITE)
                     local tw = TextWidget:new{
                         text                   = BD.auto(folder_name),
-                        face                   = Font:getFace("cfont", TITLE_FONT),
+                        face                   = library_font.getFace(TITLE_FONT),
                         bold                   = true,
                         padding                = 0,
                         fgcolor                = Blitbuffer.COLOR_BLACK,
@@ -221,7 +222,7 @@ local function apply_mosaic_title_strip()
                     if title_str then
                         local tw = TextWidget:new{
                             text                   = BD.auto(title_str),
-                            face                   = Font:getFace("cfont", TITLE_FONT),
+                            face                   = library_font.getFace(TITLE_FONT),
                             bold                   = true,
                             padding                = 0,
                             fgcolor                = Blitbuffer.COLOR_BLACK,
@@ -240,7 +241,7 @@ local function apply_mosaic_title_strip()
                     if authors_str then
                         local aw = TextWidget:new{
                             text                   = BD.auto(authors_str),
-                            face                   = Font:getFace("cfont", AUTHOR_FONT),
+                            face                   = library_font.getFace(AUTHOR_FONT),
                             bold                   = false,
                             padding                = 0,
                             fgcolor                = Blitbuffer.COLOR_BLACK,
