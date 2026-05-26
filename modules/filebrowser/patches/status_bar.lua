@@ -19,6 +19,7 @@ local function apply_status_bar()
     local LineWidget = require("ui/widget/linewidget")
     local Size = require("ui/size")
     local VerticalGroup = require("ui/widget/verticalgroup")
+    local library_font = require("common/library_font")
     local utils = require("common/utils")
     local paths = require("common/paths")
     local _ = require("gettext")
@@ -64,8 +65,19 @@ local function apply_status_bar()
         hide_browser_bar = true,
     }
 
+    local logger = require("logger")
+
+    local function _serializeOrder(t)
+        if type(t) ~= "table" then return tostring(t) end
+        return "{" .. table.concat(t, ", ") .. "}"
+    end
+
     local function loadConfig()
         local config = zen_plugin.config.status_bar or {}
+        logger.info("ZenUI [status_bar] loadConfig raw: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         -- Migration: convert old show/order/show_time format to left_order/right_order
         if config.left_order == nil and config.right_order == nil then
             local old_order = type(config.order) == "table" and config.order
@@ -102,9 +114,15 @@ local function apply_status_bar()
         -- Merge scalar defaults
         for k, v in pairs(config_default) do
             if config[k] == nil then
+                logger.info("ZenUI [status_bar] merging default for nil key:", k,
+                    "->", type(v) == "table" and _serializeOrder(v) or tostring(v))
                 config[k] = utils.deepcopy(v)
             end
         end
+        logger.info("ZenUI [status_bar] post-defaults: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         -- Validate: only known keys, no cross-side duplicates
         local seen = {}
         local function clean_order(list)
@@ -120,6 +138,10 @@ local function apply_status_bar()
         config.left_order   = clean_order(config.left_order)
         config.center_order = clean_order(config.center_order)
         config.right_order  = clean_order(config.right_order)
+        logger.info("ZenUI [status_bar] final: left_order=",
+            _serializeOrder(config.left_order),
+            "center_order=", _serializeOrder(config.center_order),
+            "right_order=",  _serializeOrder(config.right_order))
         zen_plugin.config.status_bar = config
         return config
     end
@@ -148,9 +170,9 @@ local function apply_status_bar()
         local base = Font.sizemap and Font.sizemap["xx_smallinfofont"] or 18
         local size = isUIMagnified() and math.floor(base * 1.25 + 0.5) or nil
         if size then
-            return Font:getFace("xx_smallinfofont", size)
+            return library_font.getFace(size)
         end
-        return Font:getFace("xx_smallinfofont")
+        return library_font.getFace(base)
     end
 
     -- Returns a bold TextWidget that shrinks font size before truncating.
@@ -162,7 +184,7 @@ local function apply_status_bar()
         local min_size  = math.max(10, base_size - 4)
         local size = base_size
         while size >= min_size do
-            local face  = Font:getFace("xx_smallinfofont", size)
+            local face  = library_font.getFace(size)
             local probe = TextWidget:new{ text = text, face = face, bold = true }
             local w = probe:getSize().w
             probe:free()
@@ -174,7 +196,7 @@ local function apply_status_bar()
         -- Still too wide at minimum size: truncate.
         return TextWidget:new{
             text = text,
-            face = Font:getFace("xx_smallinfofont", min_size),
+            face = library_font.getFace(min_size),
             bold = true,
             max_width = max_width,
         }
@@ -600,12 +622,12 @@ local function apply_status_bar()
         local edge_pad = opts.padding ~= nil and opts.padding or h_padding
         local face
         if opts.font_name then
-            if config.bold_text then
-                face = Font:getFace("NotoSans-Bold.ttf", Font.sizemap[opts.font_name])
-            else
-                face = Font:getFace(opts.font_name)
+            local sized = Font.sizemap and Font.sizemap[opts.font_name]
+            if sized then
+                face = library_font.getFace(sized)
             end
         end
+        if not face then face = getBarFont() end
 
         local left_content   = _buildGroup(config.left_order   or {}, face)
         local center_content = _buildGroup(config.center_order or {}, face)
@@ -847,6 +869,10 @@ local function apply_status_bar()
         if #title_group < 2 then return end
 
         local current_path = self.file_chooser and self.file_chooser.path
+        logger.info("ZenUI [status_bar] _updateStatusBar: left=",
+            _serializeOrder(config.left_order),
+            "center=", _serializeOrder(config.center_order),
+            "right=",  _serializeOrder(config.right_order))
         local status_row = createStatusRow(current_path, self)
         title_group[2] = status_row
         title_group:resetLayout()
@@ -1043,8 +1069,43 @@ local function apply_status_bar()
 
     chainHook("onNetworkConnected")
     chainHook("onNetworkDisconnected")
-    chainHook("onCharging")
-    chainHook("onNotCharging")
+
+    -- Charging events arrive in pairs during USB negotiation (NotCharging -> Charging)
+    -- within a few seconds of each other.  A synchronous rebuild per-event causes
+    -- multiple stacked e-ink partial refreshes and makes the device feel frozen.
+    -- Debounce: coalesce all charging events into one refresh 1.5 s after the last one.
+    local _charging_refresh_timer = nil
+    local function scheduleChargingRefresh(fm)
+        if _charging_refresh_timer then
+            UIManager:unschedule(_charging_refresh_timer)
+        end
+        _charging_refresh_timer = function()
+            _charging_refresh_timer = nil
+            if FileManager.instance ~= fm then return end
+            local stack = UIManager._window_stack
+            local top = stack and stack[#stack]
+            local top_widget = top and top.widget
+            if top_widget == fm or top_widget == fm.show_parent then
+                fm:_updateStatusBar()
+            elseif top_widget and top_widget._zen_status_refresh then
+                top_widget._zen_status_refresh()
+            end
+        end
+        UIManager:scheduleIn(1.5, _charging_refresh_timer)
+    end
+
+    do
+        local function hookCharging(event_name)
+            local orig = FileManager[event_name]
+            FileManager[event_name] = function(self)
+                if orig then orig(self) end
+                if not is_enabled() then return end
+                scheduleChargingRefresh(self)
+            end
+        end
+        hookCharging("onCharging")
+        hookCharging("onNotCharging")
+    end
 
     -- Suspend: cancel the periodic timer so it does not fire during sleep.
     -- Resume: do a single refresh and restart the timer aligned to the current second.
@@ -1053,6 +1114,11 @@ local function apply_status_bar()
         if orig_onSuspend then orig_onSuspend(self) end
         if _fm_autoRefresh then
             UIManager:unschedule(_fm_autoRefresh)
+        end
+        -- Cancel any pending charging debounce so it doesn't paint into the screensaver.
+        if _charging_refresh_timer then
+            UIManager:unschedule(_charging_refresh_timer)
+            _charging_refresh_timer = nil
         end
     end
 

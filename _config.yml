@@ -4,3 +4,4 @@ color_scheme: auto
 
 include:
   - CONTRIBUTING.md
+  - locales/README.md

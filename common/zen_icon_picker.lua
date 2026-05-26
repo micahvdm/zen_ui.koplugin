@@ -4,9 +4,11 @@
 --
 -- Usage:
 --   local showIconPickerDialog = require("common/zen_icon_picker")
---   showIconPickerDialog(icons_list, icons_dir, current_icon, function(name) ... end)
+--   showIconPickerDialog(icons_list, current_icon, function(name) ... end)
+--   Each item in icons_list is {name=string, file=string_or_nil}.
+--   file=nil means render via KOReader icon name; otherwise use the absolute path.
 
-local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_select)
+local function showIconPickerDialog(icons_list, current_icon, on_select)
     local _          = require("gettext")
     local Screen     = require("device").screen
     local Geom       = require("ui/geometry")
@@ -82,9 +84,9 @@ local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_sele
                 row_g = HG:new{ align = "top" }
                 table.insert(pv, row_g)
             end
-            local name      = icons_list[i]
+            local item      = icons_list[i]
+            local name      = item.name
             local is_sel    = (current_icon == name)
-            local icon_path = icons_dir .. "/" .. name .. ".svg"
             local short     = name:gsub("^quick_", ""):gsub("^tab_", ""):gsub("^lookup_", "")
             -- bordersize is added on top of content by FC.getSize(), so subtract it
             -- from the CC inner dimen so each FC reports exactly cell_w to HG.
@@ -100,7 +102,7 @@ local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_sele
                     dimen = Geom:new{ w = cell_w - cell_pad*2 - 2*brd, h = cell_h - cell_pad*2 - 2*brd },
                     VG:new{
                         align = "center",
-                        IW:new{ file = icon_path, width = icon_sz, height = icon_sz, alpha = true },
+                        IW:new{ file = item.file or nil, icon = item.file and nil or name, width = icon_sz, height = icon_sz, alpha = true },
                         TW:new{
                             text      = short,
                             face      = Font:getFace("xx_smallinfofont"),
@@ -192,7 +194,7 @@ local function showIconPickerDialog(icons_list, icons_dir, current_icon, on_sele
                         local idx   = (cur_page - 1) * per_page + row_i * cols + col_i + 1
                         if idx >= 1 and idx <= #icons_list then
                             UIManager:close(dialog)
-                            on_select(icons_list[idx])
+                            on_select(icons_list[idx].name)
                         end
                     end
                     return true

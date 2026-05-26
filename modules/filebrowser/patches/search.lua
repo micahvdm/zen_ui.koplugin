@@ -16,6 +16,10 @@ local function apply_search()
         return type(features) == "table" and features.search == true
     end
 
+    local function is_substring_enabled()
+        return G_reader_settings:isTrue("substring_search")
+    end
+
     local orig_onShowFileSearch = FileManagerFileSearcher.onShowFileSearch
 
     function FileManagerFileSearcher:onShowFileSearch(search_string)
@@ -26,6 +30,9 @@ local function apply_search()
         local search_dialog
 
         local function _doSearch()
+            -- 强制清除缓存
+            FileManagerFileSearcher.search_hash = nil
+            FileManagerFileSearcher.search_results = nil
             local search_str = search_dialog:getInputText()
             if search_str == "" then return end
             FileManagerFileSearcher.search_string = search_str
@@ -147,11 +154,21 @@ local function apply_search()
             return true
         end
         local norm_search = normalize_for_search(search_string)
-        -- Filename: whole-word, always case-insensitive
-        if find_whole_word(normalize_for_search(str_lower(filename)), norm_search) then
-            return true
+        
+        -- Filename matching
+        if is_substring_enabled() then
+            -- Substring matching
+            if string.find(normalize_for_search(str_lower(filename)), norm_search, 1, true) then
+                return true
+            end
+        else
+            -- Whole-word matching
+            if find_whole_word(normalize_for_search(str_lower(filename)), norm_search) then
+                return true
+            end
         end
-        -- Metadata: skip description, whole-word matching
+        
+        -- Metadata matching
         if self.include_metadata and is_file and DocumentRegistry:hasProvider(fullpath) then
             local book_props = self.ui.bookinfo:getDocProps(fullpath, nil, true)
             if next(book_props) ~= nil then
@@ -160,8 +177,14 @@ local function apply_search()
                     local prop = book_props[key]
                     if prop then
                         if key == "series_index" then prop = tostring(prop) end
-                        if find_whole_word(normalize_for_search(str_lower(prop)), norm_search) then
-                            return true
+                        if is_substring_enabled() then
+                            if string.find(normalize_for_search(str_lower(prop)), norm_search, 1, true) then
+                                return true
+                            end
+                        else
+                            if find_whole_word(normalize_for_search(str_lower(prop)), norm_search) then
+                                return true
+                            end
                         end
                     end
                 end

@@ -43,13 +43,13 @@ local function apply_browser_series_badge()
     end
 
     -- ── Circle drawing helper ──────────────────────────────────────────────────
-    -- Draws a filled circle row-by-row using paintRect.
+    -- Draws a filled circle row-by-row using scanline fill.
     -- cx, cy: centre;  r: radius;  color: fill color.
     local function paintCircle(bb, cx, cy, r, color)
         for row = -r, r do
             local half_w = math.floor(math.sqrt(math.max(0, r * r - row * row)))
             if half_w > 0 then
-                bb:paintRect(cx - half_w, cy + row, 2 * half_w, 1, color)
+                bb:paintRectRGB32(cx - half_w, cy + row, 2 * half_w, 1, color)
             end
         end
     end
@@ -153,60 +153,80 @@ local function apply_browser_series_badge()
             local inner_w  = math.floor(r * 1.30)
             local font_size = math.max(7, math.floor(eff_size * 0.26))
 
-            local function make_tw(label, sz)
-                return TextWidget:new{
-                    text    = label,
-                    face    = Font:getFace("cfont", sz),
-                    bold    = true,
-                    fgcolor = Blitbuffer.COLOR_BLACK,
-                    padding = 0,
-                }
-            end
+            local tw = rawget(self, "_zen_series_tw")
+            local tw_fs = rawget(self, "_zen_series_fs")
+            local tw_idx = rawget(self, "_zen_series_idx")
 
-            -- Shrink font until label fits within inner_w (down to size 7).
-            local function shrink_to_fit(label)
-                local sz = font_size
-                while sz > 7 do
-                    local tw = make_tw(label, sz)
-                    if tw:getSize().w <= inner_w then return tw end
-                    if tw.free then tw:free() end
-                    sz = sz - 1
+            local _sc = _plugin or rawget(_G, "__ZEN_UI_PLUGIN")
+            local _bcc = _sc and type(_sc.config) == "table"
+                and type(_sc.config.browser_cover_badges) == "table"
+                and _sc.config.browser_cover_badges.badge_color
+            local badge_is_dark = type(_bcc) == "table" and _bcc[1] == 0 and _bcc[2] == 0 and _bcc[3] == 0
+            local badge_fg = badge_is_dark and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
+
+            if not tw or tw_fs ~= font_size or tw_idx ~= series_idx or rawget(self, "_zen_series_dark") ~= badge_is_dark then
+                if tw and tw.free then tw:free() end
+
+                local function make_tw(label, sz)
+                    return TextWidget:new{
+                        text    = label,
+                        face    = Font:getFace("cfont", sz),
+                        bold    = true,
+                        fgcolor = badge_fg,
+                        padding = 0,
+                    }
                 end
-                return make_tw(label, 7)
-            end
 
-            -- Single-digit whole numbers (#1-#9) always keep the "#".
-            local is_single_digit = (series_idx == math.floor(series_idx) and series_idx >= 1 and series_idx <= 9)
-
-            local tw = make_tw(idx_str, font_size)
-            if tw:getSize().w > inner_w then
-                if tw.free then tw:free() end
-                -- Only drop "#" for labels that won't fit and are not single-digit whole numbers.
-                local no_hash = (not is_single_digit and idx_str:sub(1, 1) == "#") and idx_str:sub(2) or idx_str
-                if no_hash ~= idx_str then
-                    local tw2 = make_tw(no_hash, font_size)
-                    if tw2:getSize().w <= inner_w then
-                        tw = tw2
-                    else
-                        if tw2.free then tw2:free() end
-                        tw = shrink_to_fit(no_hash)
+                -- Shrink font until label fits within inner_w (down to size 7).
+                local function shrink_to_fit(label)
+                    local sz = font_size
+                    while sz > 7 do
+                        local mtw = make_tw(label, sz)
+                        if mtw:getSize().w <= inner_w then return mtw end
+                        if mtw.free then mtw:free() end
+                        sz = sz - 1
                     end
-                else
-                    tw = shrink_to_fit(idx_str)
+                    return make_tw(label, 7)
                 end
+
+                -- Single-digit whole numbers (#1-#9) always keep the "#".
+                local is_single_digit = (series_idx == math.floor(series_idx) and series_idx >= 1 and series_idx <= 9)
+
+                tw = make_tw(idx_str, font_size)
+                if tw:getSize().w > inner_w then
+                    if tw.free then tw:free() end
+                    -- Only drop "#" for labels that won't fit and are not single-digit whole numbers.
+                    local no_hash = (not is_single_digit and idx_str:sub(1, 1) == "#") and idx_str:sub(2) or idx_str
+                    if no_hash ~= idx_str then
+                        local tw2 = make_tw(no_hash, font_size)
+                        if tw2:getSize().w <= inner_w then
+                            tw = tw2
+                        else
+                            if tw2.free then tw2:free() end
+                            tw = shrink_to_fit(no_hash)
+                        end
+                    else
+                        tw = shrink_to_fit(idx_str)
+                    end
+                end
+
+                rawset(self, "_zen_series_tw", tw)
+                rawset(self, "_zen_series_fs", font_size)
+                rawset(self, "_zen_series_idx", series_idx)
+                rawset(self, "_zen_series_dark", badge_is_dark)
             end
+
             local tw_sz = tw:getSize()
 
             -- 7. Paint circle: 2-px border ring then fill.
-            paintCircle(bb, cx, cy, r + 2, Blitbuffer.COLOR_BLACK)
-            paintCircle(bb, cx, cy, r, Blitbuffer.COLOR_LIGHT_GRAY)
+            paintCircle(bb, cx, cy, r + 2, badge_fg)
+            paintCircle(bb, cx, cy, r, utils.getBadgeColor(_plugin and _plugin.config))
 
             -- 8. Paint text centred inside the circle.
             tw:paintTo(bb,
                 cx - math.floor(tw_sz.w / 2),
                 cy - math.floor(tw_sz.h / 2)
             )
-            if tw.free then tw:free() end
         end
     end
 

@@ -256,6 +256,7 @@ local function apply_history()
                 is_file  = true,
                 is_go_up = false,
                 text     = item.text,
+                _zen_disable_select = true,
                 _zen_extra_buttons = {
                     {{
                         text     = icons.delete .. "  " .. _("Remove from history"),

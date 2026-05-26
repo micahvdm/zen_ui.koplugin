@@ -33,7 +33,8 @@ local function apply_opds()
     local VGroup          = require("ui/widget/verticalgroup")
     local VSpan           = require("ui/widget/verticalspan")
     local logger          = require("logger")
-    local Screen          = require("device").screen
+    local Device          = require("device")
+    local Screen          = Device.screen
 
     -- Cover cache: [url] → { bb } | { failed = true }  (session-scoped)
     local _cover_cache = {}
@@ -130,6 +131,35 @@ local function apply_opds()
     -- Custom list item: cover on left, title/author/mandatory on right.
     local PAD   = Size.padding.small
     local PAD_V = 6
+
+    local function set_focus_visual(widget, focused)
+        if not widget or not widget[1] then return end
+        local frame = widget[1]
+        frame.invert = focused and true or false
+        if frame.dimen then
+            UIManager:setDirty(nil, "ui", frame.dimen)
+        elseif widget.dimen then
+            UIManager:setDirty(nil, "ui", widget.dimen)
+        end
+    end
+
+    local function snapshot_focus(menu)
+        if menu and menu.selected then
+            return { x = menu.selected.x, y = menu.selected.y }
+        end
+    end
+
+    local function restore_focus(menu, old_selected)
+        if not menu then return end
+        if old_selected then
+            local row = menu.layout and menu.layout[old_selected.y]
+            if row and row[old_selected.x] then
+                menu:moveFocusTo(old_selected.x, old_selected.y, 0)
+                return
+            end
+        end
+        menu:moveFocusTo(1, 1, 0)
+    end
 
     local _corner_radius = Screen:scaleBySize(8)
     local _plugin = rawget(_G, "__ZEN_UI_PLUGIN")
@@ -268,6 +298,7 @@ local function apply_opds()
             width = self.item_w, height = self.item_h,
             bordersize = 0, padding = 0,
             background = Blitbuffer.COLOR_WHITE,
+            focusable = false,
             VGroup:new{
                 align = "left",
                 VSpan:new{ width = PAD_V },
@@ -308,6 +339,16 @@ local function apply_opds()
         self:init()
         local dimen = Geom:new{ x = x, y = y, w = self.item_w, h = self.item_h }
         UIManager:setDirty(self.show_parent, function() return "ui", dimen end)
+    end
+
+    function OPDSItem:onFocus()
+        set_focus_visual(self, true)
+        return true
+    end
+
+    function OPDSItem:onUnfocus()
+        set_focus_visual(self, false)
+        return true
     end
 
     function OPDSItem:onTapSelect()
@@ -395,8 +436,19 @@ local function apply_opds()
             width = self.cell_w, height = self.cell_h,
             bordersize = 0, padding = 0,
             background = Blitbuffer.COLOR_WHITE,
+            focusable = false,
             inner,
         }
+    end
+
+    function OPDSMosaicItem:onFocus()
+        set_focus_visual(self, true)
+        return true
+    end
+
+    function OPDSMosaicItem:onUnfocus()
+        set_focus_visual(self, false)
+        return true
     end
 
     function OPDSMosaicItem:paintTo(bb, x, y)
@@ -433,10 +485,13 @@ local function apply_opds()
     -- Cover-aware updateItems; supports mosaic grid and list layouts matched to library mode.
     -- The root catalog list (paths empty) always uses a fixed list with placeholder covers.
     function OPDSBrowser:updateItems(select_number, no_recalculate_dimen)
+        local _ratio_str = G_reader_settings and G_reader_settings:readSetting("uniform_cover_ratio") or "2:3"
+        local _cover_ratio = _ratio_str == "3:4" and 3/4 or 2/3
         -- Root screen: always list, 10 per page, grey placeholder covers.
         if #(self.paths or {}) == 0 then
             if self._zen_halt then self._zen_halt(); self._zen_halt = nil end
             local old_dimen = self.dimen and self.dimen:copy()
+            local old_selected = snapshot_focus(self)
             self.layout = {}
             self.item_group:clear()
             self.page_info:resetLayout()
@@ -456,7 +511,7 @@ local function apply_opds()
             local list_perpage = 8
             self.item_height = math.floor(avail_h / list_perpage)
             local cover_h = math.max(1, self.item_height - PAD_V * 2)
-            local cover_w = math.floor(cover_h * 2 / 3)
+            local cover_w = math.floor(cover_h * _cover_ratio)
             self.perpage    = list_perpage
             self.page_num   = math.max(1, math.ceil(#self.item_table / self.perpage))
             if self.page > self.page_num then self.page = self.page_num end
@@ -487,6 +542,7 @@ local function apply_opds()
 
             self:updatePageInfo(select_number)
             self:mergeTitleBarIntoLayout()
+            restore_focus(self, old_selected)
             UIManager:setDirty(self.show_parent, function()
                 local rd = old_dimen and old_dimen:combine(self.dimen) or self.dimen
                 return "ui", rd
@@ -528,6 +584,7 @@ local function apply_opds()
         logger.dbg("OPDS updateItems: display_mode=", display_mode, "mosaic=", mosaic_mode)
 
         local old_dimen = self.dimen and self.dimen:copy()
+        local old_selected = snapshot_focus(self)
         self.layout = {}
         self.item_group:clear()
         self.page_info:resetLayout()
@@ -559,7 +616,7 @@ local function apply_opds()
             local cell_h = math.floor((avail_h - (1 + num_rows) * item_margin) / num_rows)
             local cover_area_h = cell_h - _strip_h
             local cover_h = math.max(1, cover_area_h - PAD_V * 2)
-            local cover_w = math.floor(cover_h * 2 / 3)
+            local cover_w = math.floor(cover_h * _cover_ratio)
             self.item_height = cell_h
             self.perpage     = num_cols * num_rows
             self.page_num    = math.max(1, math.ceil(#self.item_table / self.perpage))
@@ -626,7 +683,7 @@ local function apply_opds()
             -- derive item_height to fill avail_h exactly (no gap at bottom)
             self.item_height = math.floor(avail_h / list_perpage)
             cover_h = math.max(1, self.item_height - PAD_V * 2)
-            local cover_w = math.floor(cover_h * 2 / 3)
+            local cover_w = math.floor(cover_h * _cover_ratio)
             self.perpage     = list_perpage
             self.page_num    = math.max(1, math.ceil(#self.item_table / self.perpage))
             if self.page > self.page_num then self.page = self.page_num end
@@ -672,6 +729,7 @@ local function apply_opds()
 
         self:updatePageInfo(select_number)
         self:mergeTitleBarIntoLayout()
+        restore_focus(self, old_selected)
         UIManager:setDirty(self.show_parent, function()
             local rd = old_dimen and old_dimen:combine(self.dimen) or self.dimen
             return "ui", rd
@@ -698,6 +756,17 @@ local function apply_opds()
 
     -- ── Navigation buttons ───────────────────────────────────────────────────
 
+    local function activate_right_button(browser)
+        local in_catalog = #browser.paths > 0
+        if in_catalog and browser.search_url then
+            browser:searchCatalog(browser.search_url)
+        elseif browser.facet_groups then
+            browser:showFacetMenu()
+        else
+            browser:showOPDSMenu()
+        end
+    end
+
     local function fix_buttons(browser)
         if browser.title_bar then
             browser.title_bar:setLeftIcon("chevron.left")
@@ -706,7 +775,11 @@ local function apply_opds()
             if #browser.paths > 0 then
                 browser:onReturn()
             elseif browser.close_callback then
-                browser.close_callback()
+                -- Stock close_callback may reference opds_browser (nil in some versions).
+                local ok = pcall(browser.close_callback)
+                if not ok then UIManager:close(browser) end
+            else
+                UIManager:close(browser)
             end
         end
         if browser.title_bar and browser.title_bar.right_button then
@@ -716,15 +789,29 @@ local function apply_opds()
             local right_icon = (in_catalog and has_search) and "appbar.search" or "appbar.menu"
             browser.title_bar:setRightIcon(right_icon)
             browser.title_bar.right_button.callback = function()
-                if in_catalog and browser.search_url then
-                    browser:searchCatalog(browser.search_url)
-                elseif browser.facet_groups then
-                    browser:showFacetMenu()
-                else
-                    browser:showOPDSMenu()
-                end
+                activate_right_button(browser)
             end
         end
+
+        if Device:hasKeys() then
+            browser.key_events = browser.key_events or {}
+            -- Stock Menu binds the physical Menu key to LeftButtonTap.  Zen UI
+            -- moves OPDS navigation/back to the left button and the OPDS menu
+            -- to the right button, so override that inherited binding here.
+            browser.key_events.LeftButtonTap = {
+                { "Menu" },
+                event = "ZenOPDSMenu",
+            }
+            browser.key_events.ZenOPDSMenu = {
+                { "Menu" },
+                event = "ZenOPDSMenu",
+            }
+        end
+    end
+
+    function OPDSBrowser:onZenOPDSMenu()
+        activate_right_button(self)
+        return true
     end
 
     local orig_init = OPDSBrowser.init
@@ -740,14 +827,14 @@ local function apply_opds()
         local default_url = G_reader_settings:readSetting("opds_default_url")
         if default_url then
             self._zen_default_navigated = true
-            -- Pre-load credentials from the matching server entry.
-            for _, entry in ipairs(self.item_table or {}) do
-                if entry.url == default_url then
-                    self.root_catalog_title    = entry.text
-                    self.root_catalog_username = entry.username
-                    self.root_catalog_password = entry.password
-                    self.root_catalog_raw_names = entry.raw_names
-                    self.catalog_title         = entry.text
+            -- Pre-load credentials so fetchFeed can auth on the first request.
+            for _i, server in ipairs(self.servers or {}) do
+                if server.url == default_url then
+                    self.root_catalog_title     = server.title
+                    self.root_catalog_username  = server.username
+                    self.root_catalog_password  = server.password
+                    self.root_catalog_raw_names = server.raw_names
+                    self.catalog_title          = server.title
                     break
                 end
             end
@@ -764,7 +851,12 @@ local function apply_opds()
     local orig_updatePageInfo = Menu.updatePageInfo
     function OPDSBrowser:updatePageInfo(select_number)
         orig_updatePageInfo(self, select_number)
-        if self.page_return_arrow then self.page_return_arrow:hide() end
+        if self.page_return_arrow then
+            self.page_return_arrow:hide()
+            -- Kill callbacks so the invisible hit area can't trigger back navigation.
+            self.page_return_arrow.callback = nil
+            self.page_return_arrow.hold_callback = nil
+        end
     end
 
     -- Tag book items with cover_url for async cover loading.
@@ -900,6 +992,20 @@ local function apply_opds()
     end
 
     -- Hold on a root-list catalog entry: vertical single-column menu.
+    -- Keep opds_default_url in sync when a server's URL is changed via Edit.
+    local orig_editCatalogFromInput = OPDSBrowser.editCatalogFromInput
+    function OPDSBrowser:editCatalogFromInput(fields, item, no_refresh)
+        local old_url = item and item.url
+        orig_editCatalogFromInput(self, fields, item, no_refresh)
+        if old_url then
+            local saved_default = G_reader_settings:readSetting("opds_default_url")
+            if saved_default == old_url then
+                local new_url = fields[2]:match("^%a+://") and fields[2] or "http://" .. fields[2]
+                G_reader_settings:saveSetting("opds_default_url", new_url)
+            end
+        end
+    end
+
     function OPDSBrowser:onMenuHold(item)
         if #self.paths > 0 or item.idx == 1 then return true end
         local ButtonDialog   = require("ui/widget/buttondialog")

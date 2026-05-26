@@ -159,36 +159,20 @@ function M.build(ctx)
         end,
     })
 
-    -- Icon list: all icons in the plugin's icons/ dir, excluding branding/utility icons.
+    -- Icon list: plugin icons + KOReader user/built-in icons.
     local CUSTOM_BUTTON_ICONS
     local function getCustomButtonIcons()
         if CUSTOM_BUTTON_ICONS then return CUSTOM_BUTTON_ICONS end
+        local utils = require("common/utils")
+        local ok_root, root = pcall(require, "common/plugin_root")
         local excluded = { zen_ui_light = true, zen_ui_update = true }
-        local icons = {}
-        local ok, lfs = pcall(require, "libs/libkoreader-lfs")
-        local root = ok and lfs and require("common/plugin_root")
-        if root then
-            local icons_dir = root .. "/icons"
-            for f in lfs.dir(icons_dir) do
-                -- skip dotfiles, backups, non-svg
-                if f:match("%.svg$") and not f:match("%.bak%.svg$") then
-                    local name = f:sub(1, -5) -- strip .svg
-                    if not excluded[name] then
-                        icons[#icons + 1] = name
-                    end
-                end
-            end
-            table.sort(icons)
-        end
-        CUSTOM_BUTTON_ICONS = icons
+        CUSTOM_BUTTON_ICONS = utils.getIconPickerList(ok_root and root or nil, excluded)
         return CUSTOM_BUTTON_ICONS
     end
 
     local _icon_picker = require("common/zen_icon_picker")
     local function showIconPickerDialog(cb, on_select)
-        local ok_root, root = pcall(require, "common/plugin_root")
-        if not ok_root or not root then return end
-        _icon_picker(getCustomButtonIcons(), root .. "/icons", cb.icon, on_select)
+        _icon_picker(getCustomButtonIcons(), cb.icon, on_select)
     end
 
     local function get_cb_label(cb)

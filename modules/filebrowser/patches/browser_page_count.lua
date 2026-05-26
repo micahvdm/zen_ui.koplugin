@@ -51,7 +51,7 @@ local function apply_browser_page_count()
         return bookinfo and bookinfo.pages and bookinfo.pages > 0 and bookinfo.pages or nil
     end
 
-    -- Pill drawing helper: draws a horizontal capsule shape row-by-row using paintRect.
+    -- Pill drawing helper: draws a horizontal capsule shape row-by-row using scanline fill.
     -- bx, by: top-left corner;  bw, bh: total bounding box;  color: fill color.
     local function paintPill(bb, bx, by, bw, bh, color)
         local r = bh / 2
@@ -61,7 +61,7 @@ local function apply_browser_page_count()
             local x0 = math.ceil(bx + r - dx)
             local x1 = math.floor(bx + bw - r + dx)
             local w  = x1 - x0
-            if w > 0 then bb:paintRect(x0, by + row, w, 1, color) end
+            if w > 0 then bb:paintRectRGB32(x0, by + row, w, 1, color) end
         end
     end
 
@@ -168,13 +168,33 @@ local function apply_browser_page_count()
             --    matching the cover badge proportions exactly.
             local font_size = math.max(7, math.floor(eff_size * 0.24))
             local page_str  = utils.formatPageCount(pages)
-            local tw = TextWidget:new{
-                text    = page_str,
-                face    = Font:getFace("cfont", font_size),
-                bold    = true,
-                fgcolor = Blitbuffer.COLOR_BLACK,
-                padding = 0,
-            }
+
+            local tw = rawget(self, "_zen_pages_tw")
+            local tw_fs = rawget(self, "_zen_pages_fs")
+            local tw_str = rawget(self, "_zen_pages_str")
+
+            local _pc = _plugin or rawget(_G, "__ZEN_UI_PLUGIN")
+            local _bcc = _pc and type(_pc.config) == "table"
+                and type(_pc.config.browser_cover_badges) == "table"
+                and _pc.config.browser_cover_badges.badge_color
+            local badge_is_dark = type(_bcc) == "table" and _bcc[1] == 0 and _bcc[2] == 0 and _bcc[3] == 0
+            local badge_fg = badge_is_dark and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
+
+            if not tw or tw_fs ~= font_size or tw_str ~= page_str or rawget(self, "_zen_pages_dark") ~= badge_is_dark then
+                if tw and tw.free then tw:free() end
+                tw = TextWidget:new{
+                    text    = page_str,
+                    face    = Font:getFace("cfont", font_size),
+                    bold    = true,
+                    fgcolor = badge_is_dark and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK,
+                    padding = 0,
+                }
+                rawset(self, "_zen_pages_tw", tw)
+                rawset(self, "_zen_pages_fs", font_size)
+                rawset(self, "_zen_pages_str", page_str)
+                rawset(self, "_zen_pages_dark", badge_is_dark)
+            end
+
             local tw_sz  = tw:getSize()
             -- Height fixed by eff_size (same scale as cover badge bh).
             local bh     = math.floor(eff_size * 0.85)
@@ -186,15 +206,14 @@ local function apply_browser_page_count()
             local by     = cover_bottom - bh - inset
 
             -- 7. Paint pill: 2-px border offset (matches cover badge pattern).
-            paintPill(bb, bx - 2, by - 2, bw + 4, bh + 4, Blitbuffer.COLOR_BLACK)
-            paintPill(bb, bx, by, bw, bh, Blitbuffer.COLOR_LIGHT_GRAY)
+            paintPill(bb, bx - 2, by - 2, bw + 4, bh + 4, badge_fg)
+            paintPill(bb, bx, by, bw, bh, utils.getBadgeColor(_plugin and _plugin.config))
 
             -- 8. Paint text centred inside the pill.
             tw:paintTo(bb,
                 bx + math.floor((bw - tw_sz.w) / 2),
                 by + math.floor((bh - tw_sz.h) / 2)
             )
-            if tw.free then tw:free() end
         end
     end
 

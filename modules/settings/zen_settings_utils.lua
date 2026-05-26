@@ -419,4 +419,112 @@ function M.reorder_nested_items_by_text(item_table, target_text, preferred_order
     return false
 end
 
+-- ---------------------------------------------------------------------------
+-- Color picker sub-menu builder
+-- ---------------------------------------------------------------------------
+
+--- Build a color-picker sub-menu item (text_func + sub_item_table).
+--- opts fields:
+---   label        string         prefix for the parent item text_func
+---   get          function()     returns current {r,g,b} or nil
+---   set          function(r,g,b) apply and save the new color
+---   reset        function or nil  if provided, prepends a "Default" preset
+---   default_text string         shown after label when get() is nil (default: "Default")
+---   reset_text   string         text of the "Default" sub-item (defaults to default_text)
+---   dialog_title string         InputDialog title
+---   presets      table          list of {text, r, g, b}
+---   enabled_func function or nil
+function M.buildColorSubMenu(opts)
+    local get          = opts.get
+    local set          = opts.set
+    local reset        = opts.reset
+    local label        = opts.label
+    local default_text = opts.default_text or _("Default")
+    local reset_text   = opts.reset_text   or default_text
+    local dialog_title = opts.dialog_title or _("Custom RGB")
+    local presets      = opts.presets or {}
+
+    local function fmt(c)
+        return string.format("%d,%d,%d", c[1], c[2], c[3])
+    end
+
+    local sub_items = {}
+
+    if reset then
+        table.insert(sub_items, {
+            text = reset_text,
+            checked_func = function() return get() == nil end,
+            callback = function() reset() end,
+        })
+    end
+
+    for _i, p in ipairs(presets) do
+        local pr, pg, pb = p.r, p.g, p.b
+        table.insert(sub_items, {
+            text = p.text,
+            checked_func = function()
+                local c = get()
+                return type(c) == "table" and c[1] == pr and c[2] == pg and c[3] == pb
+            end,
+            callback = function() set(pr, pg, pb) end,
+        })
+    end
+
+    table.insert(sub_items, {
+        text_func = function()
+            local c = get()
+            if c then return _("Custom RGB") .. " (" .. fmt(c) .. ")" end
+            return _("Custom RGB")
+        end,
+        keep_menu_open = true,
+        callback = function(touchmenu_instance)
+            local InputDialog = require("ui/widget/inputdialog")
+            local c = get() or { 0, 0, 0 }
+            local dlg
+            dlg = InputDialog:new{
+                title = dialog_title,
+                input = fmt(c),
+                hint = _("Format: R,G,B (0-255)"),
+                buttons = {{
+                    {
+                        text = _("Cancel"),
+                        id = "close",
+                        callback = function() UIManager:close(dlg) end,
+                    },
+                    {
+                        text = _("Set"),
+                        is_enter_default = true,
+                        callback = function()
+                            local text = dlg:getInputText() or ""
+                            local r, g, b = text:match("^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
+                            if r and g and b then
+                                set(
+                                    math.max(0, math.min(255, tonumber(r))),
+                                    math.max(0, math.min(255, tonumber(g))),
+                                    math.max(0, math.min(255, tonumber(b)))
+                                )
+                                UIManager:close(dlg)
+                                if touchmenu_instance then touchmenu_instance:updateItems() end
+                            end
+                        end,
+                    },
+                }},
+            }
+            UIManager:show(dlg)
+            dlg:onShowKeyboard()
+        end,
+    })
+
+    local item = {
+        text_func = function()
+            local c = get()
+            if c then return label .. fmt(c) end
+            return label .. default_text
+        end,
+        sub_item_table = sub_items,
+    }
+    if opts.enabled_func then item.enabled_func = opts.enabled_func end
+    return item
+end
+
 return M

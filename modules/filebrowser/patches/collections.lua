@@ -1,5 +1,12 @@
 local logger = require("logger")
 local icons  = require("common/inline_icon_map")
+local Cover  = require("common/cover_utils")
+local library_font = require("common/library_font")
+local OverlapGroup = require("ui/widget/overlapgroup")
+local CenterContainer = require("ui/widget/container/centercontainer")
+local VerticalGroup = require("ui/widget/verticalgroup")
+local VerticalSpan = require("ui/widget/verticalspan")
+
 logger.dbg("zen-coll: module loaded")
 
 local function apply_collections()
@@ -29,30 +36,34 @@ local function apply_collections()
         return hide == true or hide == nil
     end
 
-    ---------------------------------------------------------------------------
-    -- Utility: walk upvalue chain to find a named upvalue
-    ---------------------------------------------------------------------------
-    local function get_upvalue(fn, name)
-        if type(fn) ~= "function" then return nil end
-        for i = 1, 64 do
-            local upname, value = debug.getupvalue(fn, i)
-            if not upname then break end
-            if upname == name then return value end
+    local function apply_button_group_font(button_rows, nominal_size)
+        if type(button_rows) ~= "table" then return button_rows end
+        local size = library_font.scaleValue(nominal_size or 20)
+        for _i, row in ipairs(button_rows) do
+            if type(row) == "table" then
+                for _j, btn in ipairs(row) do
+                    if type(btn) == "table" and type(btn.text) == "string" then
+                        local face = btn.font_face or btn.text_font_face or library_font.getFontName()
+                        local fsize = btn.font_size or btn.text_font_size or size
+                        btn.font_face = face
+                        btn.font_size = fsize
+                        -- Keep legacy aliases for compatibility with non-ButtonTable paths.
+                        btn.text_font_face = face
+                        btn.text_font_size = fsize
+                    end
+                end
+            end
         end
+        return button_rows
     end
 
     ---------------------------------------------------------------------------
-    -- Display mode setup: match the filemanager display mode setting
-    -- Returns the mode type ("mosaic", "list") or "classic" / false
+    -- Display mode setup
     ---------------------------------------------------------------------------
-    -- Pre-cached display mode: set in onShowColl before orig call so Menu:init uses
-    -- the correct value even if CoverBrowser overwrites collection_display_mode in DB.
     local _coll_display_mode_override = nil
 
     local function setup_display_mode(menu)
         local BookInfoManager = require("bookinfomanager")
-        -- Use pre-cached mode if available (set before orig_onShowColl to survive
-        -- CoverBrowser overwriting the DB during updateCollectionFromFolder).
         local display_mode = _coll_display_mode_override
             or BookInfoManager:getSetting("collection_display_mode")
         menu._zen_coll_list = true
@@ -64,7 +75,7 @@ local function apply_collections()
         local ok_cm, CoverMenu = pcall(require, "covermenu")
         if not ok_cm then return false end
 
-        local display_mode_type = display_mode:gsub("_.*", "") -- "mosaic" or "list"
+        local display_mode_type = display_mode:gsub("_.*", "")
 
         menu.updateItems  = CoverMenu.updateItems
         menu.onCloseWidget = CoverMenu.onCloseWidget
@@ -93,7 +104,6 @@ local function apply_collections()
             menu._do_filename_only    = display_mode == "list_image_filename"
         end
 
-        -- Stubs: prevent CoverMenu from crashing on BookList-only APIs
         if not menu.getBookInfo then
             menu.getBookInfo = function() return {} end
         end
@@ -101,15 +111,69 @@ local function apply_collections()
             menu.resetBookInfoCache = function() end
         end
 
-        -- Prevent CoverBrowser's getUpdateItemTableFunc from overwriting these instance patches
         menu._coverbrowser_overridden = true
-
 
         return display_mode_type
     end
 
+    local function get_collection_files_in_cover_order(coll_name)
+        local ReadCollection = require("readcollection")
+        local coll = ReadCollection.coll[coll_name]
+        if type(coll) ~= "table" then return {} end
+
+        local sorted = {}
+        for _k, entry in pairs(coll) do
+            if type(entry) == "table" and type(entry.file) == "string" and entry.file ~= "" then
+                table.insert(sorted, entry)
+            end
+        end
+
+        table.sort(sorted, function(a, b)
+            local a_order = tonumber(a.order) or 0
+            local b_order = tonumber(b.order) or 0
+            if a_order == b_order then
+                return (a.file or "") < (b.file or "")
+            end
+            return a_order < b_order
+        end)
+
+        local files = {}
+        for _i, entry in ipairs(sorted) do
+            table.insert(files, entry.file)
+        end
+        return files
+    end
+
+    local function build_fake_chooser_from_files(files)
+        return {
+            genItemTableFromPath = function()
+                local items = {}
+                for _i, fpath in ipairs(files) do
+                    table.insert(items, { path = fpath, is_file = true })
+                end
+                return items
+            end,
+        }
+    end
+
+    local function get_visible_files_from_menu(menu)
+        if not (menu and type(menu.item_table) == "table") then return nil end
+
+        local files = {}
+        for _i, entry in ipairs(menu.item_table) do
+            if type(entry) == "table" and not entry.is_go_up then
+                local fpath = entry.file or entry.filepath or entry.path
+                if type(fpath) == "string" and fpath ~= "" then
+                    table.insert(files, fpath)
+                end
+            end
+        end
+
+        return #files > 0 and files or nil
+    end
+
     ---------------------------------------------------------------------------
-    -- Hook MosaicMenuItem.update once for collection gallery covers
+    -- Hook MosaicMenuItem.update for collection gallery covers
     ---------------------------------------------------------------------------
     local _mosaic_item_patched = false
 
@@ -118,19 +182,12 @@ local function apply_collections()
 
         local ok, MosaicMenu = pcall(require, "mosaicmenu")
         if not ok then return end
-        local MosaicMenuItem = get_upvalue(MosaicMenu._updateItemsBuildUI, "MosaicMenuItem")
+        local MosaicMenuItem = Cover.getUpvalue(MosaicMenu._updateItemsBuildUI, "MosaicMenuItem")
         if not MosaicMenuItem then return end
         _mosaic_item_patched = true
 
-        local ReadCollection  = require("readcollection")
-        local BookInfoManager = require("bookinfomanager")
-        local util            = require("util")
+        local Size = require("ui/size")
 
-        -- Ensure onFocus keeps underlines hidden for all mosaic items.
-        -- browser_hide_underline patches this via userpatch, but if the
-        -- userpatch callback hasn't fired yet (or silently failed), the
-        -- original onFocus sets COLOR_BLACK on the focused item — which
-        -- is the exact symptom when navigating back to collections list.
         local Blitbuffer_uc = require("ffi/blitbuffer")
         if not MosaicMenuItem._zen_coll_focus_patched then
             MosaicMenuItem._zen_coll_focus_patched = true
@@ -149,136 +206,46 @@ local function apply_collections()
                 return orig_update(self, ...)
             end
 
-            -- Mark as directory to keep CoverMenu from scheduling extraction
             self.is_directory = true
 
             local coll_name = self.entry.name
-            local coll = ReadCollection.coll[coll_name]
-            local book_count = coll and util.tableSize(coll) or 0
+            local files = get_collection_files_in_cover_order(coll_name)
+            local book_count = #files
 
-            -- Gather first 4 covers sorted by order
-            local covers = {}
-            if coll then
-                local sorted = {}
-                for _, item in pairs(coll) do
-                    table.insert(sorted, item)
-                end
-                table.sort(sorted, function(a, b)
-                    return (a.order or 0) < (b.order or 0)
-                end)
-                for i = 1, math.min(#sorted, 4) do
-                    local bi = BookInfoManager:getBookInfo(sorted[i].file, true)
-                    if bi and bi.cover_bb and bi.has_cover
-                            and bi.cover_fetched and not bi.ignore_cover then
-                        table.insert(covers, {
-                            data = bi.cover_bb:copy(),
-                            w    = bi.cover_w,
-                            h    = bi.cover_h,
-                        })
-                    end
-                end
-            end
+            -- Build fake chooser for collection
+            local fake_chooser = build_fake_chooser_from_files(files)
 
-            -- Render via browser_folder_cover's _setFolderCover when available
+            local border = Size.border.thin
+            local max_w = self.width - 2 * border
+            local bh = self.height - 2 * border
+
+            -- Use unified makeCover - it handles everything: mode detection, cover collection, drawing
+            local cover_widget, mode, scenario = Cover.makeCover(coll_name, fake_chooser, {
+                is_folder = true,
+                max_w = max_w,
+                max_h = bh,
+                folder_name = coll_name,
+            })
+
             if self._setFolderCover then
-                self:_setFolderCover {
-                    gallery    = covers,
-                    book_count = book_count,
-                }
+                if scenario == "empty_folder" then
+                    self:_setFolderCover { no_image = true, book_count = book_count }
+                else
+                    -- makeCover already returned the appropriate widget based on mode
+                    self:_setFolderCover { image_widget = cover_widget, book_count = book_count }
+                end
                 return
             end
 
-            -- Fallback: build gallery widget inline
-            local Blitbuffer       = require("ffi/blitbuffer")
-            local CenterContainer  = require("ui/widget/container/centercontainer")
-            local FrameContainer   = require("ui/widget/container/framecontainer")
-            local HorizontalGroup  = require("ui/widget/horizontalgroup")
-            local ImageWidget      = require("ui/widget/imagewidget")
-            local LineWidget       = require("ui/widget/linewidget")
-            local OverlapGroup     = require("ui/widget/overlapgroup")
-            local Size             = require("ui/size")
-            local VerticalGroup    = require("ui/widget/verticalgroup")
-            local VerticalSpan     = require("ui/widget/verticalspan")
-
-            local border = Size.border.thin
-            local max_w  = self.width  - 2 * border
-            local bh     = self.height - 2 * border
-            local portrait_w, portrait_h
-            if bh * 2 <= max_w * 3 then
-                portrait_h = bh
-                portrait_w = math.floor(bh * 2 / 3)
-            else
-                portrait_w = max_w
-                portrait_h = math.min(math.floor(max_w * 3 / 2), bh)
-            end
-
-            local sep     = 1
-            local half_w  = math.floor((portrait_w - sep) / 2)
-            local half_w2 = portrait_w - sep - half_w
-            local half_h  = math.floor((portrait_h - sep) / 2)
-            local half_h2 = portrait_h - sep - half_h
-            local cell_dims = {
-                { w = half_w,  h = half_h  },
-                { w = half_w2, h = half_h  },
-                { w = half_w,  h = half_h2 },
-                { w = half_w2, h = half_h2 },
-            }
-            local cells = {}
-            for i = 1, 4 do
-                local c  = covers[i]
-                local cd = cell_dims[i]
-                if c then
-                    cells[i] = CenterContainer:new{
-                        dimen = { w = cd.w, h = cd.h },
-                        ImageWidget:new{ image = c.data, width = cd.w, height = cd.h },
-                    }
-                else
-                    cells[i] = CenterContainer:new{
-                        dimen = { w = cd.w, h = cd.h },
-                        VerticalSpan:new{ width = 1 },
-                    }
-                end
-            end
-            local dimen = { w = portrait_w + 2 * border, h = portrait_h + 2 * border }
-            local image_widget = FrameContainer:new{
-                padding = 0, bordersize = border,
-                width = dimen.w, height = dimen.h,
-                background = Blitbuffer.COLOR_LIGHT_GRAY,
-                CenterContainer:new{
-                    dimen = { w = portrait_w, h = portrait_h },
-                    VerticalGroup:new{
-                        HorizontalGroup:new{
-                            cells[1],
-                            LineWidget:new{
-                                background = Blitbuffer.COLOR_WHITE,
-                                dimen = { w = sep, h = half_h },
-                            },
-                            cells[2],
-                        },
-                        LineWidget:new{
-                            background = Blitbuffer.COLOR_WHITE,
-                            dimen = { w = portrait_w, h = sep },
-                        },
-                        HorizontalGroup:new{
-                            cells[3],
-                            LineWidget:new{
-                                background = Blitbuffer.COLOR_WHITE,
-                                dimen = { w = sep, h = half_h2 },
-                            },
-                            cells[4],
-                        },
-                    },
-                },
-                overlap_align = "center",
-            }
-            local centered_top = math.floor((self.height - dimen.h) / 2)
+            -- Fallback: directly assign to _underline_container
+            local centered_top = math.floor((self.height - (bh + 2 * border)) / 2)
             local widget = OverlapGroup:new{
                 dimen = { w = self.width, h = self.height },
                 VerticalGroup:new{
                     VerticalSpan:new{ width = centered_top },
                     CenterContainer:new{
-                        dimen = { w = self.width, h = dimen.h },
-                        image_widget,
+                        dimen = { w = self.width, h = bh + 2 * border },
+                        cover_widget,
                     },
                 },
             }
@@ -290,8 +257,7 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Hook ListMenuItem.update once for collection list-mode rendering
-    -- (mirrors the visual style of browser_list_item_layout)
+    -- Hook ListMenuItem.update for collection list-mode rendering
     ---------------------------------------------------------------------------
     local _list_item_patched = false
 
@@ -300,7 +266,7 @@ local function apply_collections()
 
         local ok, ListMenu = pcall(require, "listmenu")
         if not ok then return end
-        local ListMenuItem = get_upvalue(ListMenu._updateItemsBuildUI, "ListMenuItem")
+        local ListMenuItem = Cover.getUpvalue(ListMenu._updateItemsBuildUI, "ListMenuItem")
         if not ListMenuItem then return end
         _list_item_patched = true
 
@@ -310,6 +276,7 @@ local function apply_collections()
         local CenterContainer = require("ui/widget/container/centercontainer")
         local Device          = require("device")
         local Font            = require("ui/font")
+        local library_font    = require("common/library_font")
         local FrameContainer  = require("ui/widget/container/framecontainer")
         local HorizontalGroup = require("ui/widget/horizontalgroup")
         local HorizontalSpan  = require("ui/widget/horizontalspan")
@@ -324,7 +291,6 @@ local function apply_collections()
         local TextWidget      = require("ui/widget/textwidget")
         local VerticalGroup   = require("ui/widget/verticalgroup")
         local VerticalSpan    = require("ui/widget/verticalspan")
-        local util            = require("util")
 
         local Screen = Device.screen
         local scale_by_size = Screen:scaleBySize(1000000) * (1 / 1000000)
@@ -340,8 +306,8 @@ local function apply_collections()
             self.is_directory = true
 
             local coll_name  = self.entry.name
-            local coll       = ReadCollection.coll[coll_name]
-            local book_count = coll and util.tableSize(coll) or 0
+            local files = get_collection_files_in_cover_order(coll_name)
+            local book_count = #files
             local display_name = coll_name
             if coll_name == ReadCollection.default_collection_name then
                 local _ = require("gettext")
@@ -351,179 +317,48 @@ local function apply_collections()
             local underline_h  = 1
             local dimen_h      = self.height - 2 * underline_h
             local border_size  = Size.border.thin
-            local cover_v_pad  = Screen:scaleBySize(4)  -- matches bll top+bottom padding
+            local cover_v_pad  = Screen:scaleBySize(4)
             local cover_zone_w = dimen_h
             local max_img      = dimen_h - 2 * border_size - 2 * cover_v_pad
-            local cover_w      = math.floor(max_img * 2 / 3)
+
+            local ratio = Cover.getRatio()
+            local cover_w = math.floor(max_img * ratio)
 
             local function _fontSize(nominal, max_size)
-                local fs = math.floor(nominal * dimen_h * (1 / 64) / scale_by_size)
-                if max_size and fs >= max_size then return max_size end
+                local scale = library_font.getScale(18)
+                local fs = math.floor(nominal * dimen_h * (1 / 64) / scale_by_size * scale + 0.5)
+                if max_size then
+                    local max_scaled = math.max(1, math.floor(max_size * scale + 0.5))
+                    if fs >= max_scaled then return max_scaled end
+                end
                 return fs
             end
 
+            -- Build fake chooser
+            local fake_chooser = build_fake_chooser_from_files(files)
+
+            -- Use unified makeCover
+            local cover_widget, mode, scenario = Cover.makeCover(coll_name, fake_chooser, {
+                is_folder = true,
+                max_w = cover_w + 2 * border_size,
+                max_h = max_img + 2 * border_size,
+                folder_name = display_name,
+                book_count = book_count,
+            })
+
             -- Cover thumbnail
             local wleft
-            if self.do_cover_image then
-                local gallery_mode = BookInfoManager:getSetting("folder_gallery_mode")
-                local max_covers = gallery_mode and 4 or 1
-                local covers = {}
-                if coll then
-                    local sorted = {}
-                    for _, item in pairs(coll) do
-                        table.insert(sorted, item)
-                    end
-                    table.sort(sorted, function(a, b)
-                        return (a.order or 0) < (b.order or 0)
-                    end)
-                    for i = 1, #sorted do
-                        local bi = BookInfoManager:getBookInfo(sorted[i].file, true)
-                        if bi and bi.cover_bb and bi.has_cover
-                                and bi.cover_fetched and not bi.ignore_cover then
-                            table.insert(covers, { data = bi.cover_bb:copy() })
-                            if #covers >= max_covers then break end
-                        end
-                    end
-                end
-
-                local cover_frame
-                if gallery_mode then
-                    -- 2×2 gallery mosaic
-                    local gall_w = cover_w
-                    local gall_h = max_img
-                    if #covers > 0 then
-                        local sep     = 1
-                        local half_w  = math.floor((gall_w - sep) / 2)
-                        local half_w2 = gall_w - sep - half_w
-                        local half_h  = math.floor((gall_h - sep) / 2)
-                        local half_h2 = gall_h - sep - half_h
-                        local cell_dims = {
-                            { w = half_w,  h = half_h  },
-                            { w = half_w2, h = half_h  },
-                            { w = half_w,  h = half_h2 },
-                            { w = half_w2, h = half_h2 },
-                        }
-                        local cells = {}
-                        for i = 1, 4 do
-                            local c  = covers[i]
-                            local cd = cell_dims[i]
-                            if c then
-                                cells[i] = CenterContainer:new{
-                                    dimen = { w = cd.w, h = cd.h },
-                                    ImageWidget:new{
-                                        image  = c.data,
-                                        width  = cd.w,
-                                        height = cd.h,
-                                    },
-                                }
-                            else
-                                cells[i] = CenterContainer:new{
-                                    dimen = { w = cd.w, h = cd.h },
-                                    VerticalSpan:new{ width = 1 },
-                                }
-                            end
-                        end
-                        cover_frame = FrameContainer:new{
-                            width = gall_w + 2 * border_size,
-                            height = gall_h + 2 * border_size,
-                            margin = 0, padding = 0, bordersize = border_size,
-                            background = Blitbuffer.COLOR_LIGHT_GRAY,
-                            CenterContainer:new{
-                                dimen = { w = gall_w, h = gall_h },
-                                VerticalGroup:new{
-                                    HorizontalGroup:new{
-                                        cells[1],
-                                        LineWidget:new{
-                                            background = Blitbuffer.COLOR_WHITE,
-                                            dimen = { w = sep, h = half_h },
-                                        },
-                                        cells[2],
-                                    },
-                                    LineWidget:new{
-                                        background = Blitbuffer.COLOR_WHITE,
-                                        dimen = { w = gall_w, h = sep },
-                                    },
-                                    HorizontalGroup:new{
-                                        cells[3],
-                                        LineWidget:new{
-                                            background = Blitbuffer.COLOR_WHITE,
-                                            dimen = { w = sep, h = half_h2 },
-                                        },
-                                        cells[4],
-                                    },
-                                },
-                            },
-                        }
-                        self.menu._has_cover_images = true
-                        self._has_cover_image = true
-                    else
-                        -- Empty gallery placeholder
-                        cover_frame = FrameContainer:new{
-                            width = gall_w + 2 * border_size,
-                            height = gall_h + 2 * border_size,
-                            margin = 0, padding = 0, bordersize = border_size,
-                            background = Blitbuffer.COLOR_LIGHT_GRAY,
-                            CenterContainer:new{
-                                dimen = { w = gall_w, h = gall_h },
-                                VerticalSpan:new{ width = 1 },
-                            },
-                        }
-                    end
-                elseif #covers > 0 then
-                    -- Single cover (first book)
-                    local bb     = covers[1].data
-                    local bb_w   = bb:getWidth()
-                    local bb_h   = bb:getHeight()
-                    local sf     = math.max(cover_w / bb_w, max_img / bb_h)
-                    local scaled_w = math.max(cover_w,  math.ceil(bb_w * sf))
-                    local scaled_h = math.max(max_img, math.ceil(bb_h * sf))
-                    local x_off  = math.floor((scaled_w - cover_w) / 2)
-                    local y_off  = math.floor((scaled_h - max_img) / 2)
-                    local scaled_bb = bb:scale(scaled_w, scaled_h)
-                    local fill_bb   = Blitbuffer.new(cover_w, max_img,
-                                                     scaled_bb:getType())
-                    fill_bb:blitFrom(scaled_bb, 0, 0,
-                                     x_off, y_off, cover_w, max_img)
-                    scaled_bb:free()
-                    bb:free()
-                    local wimage = ImageWidget:new{
-                        image        = fill_bb,
-                        scale_factor = 1,
-                        _free_image  = true,
-                    }
-                    wimage:_render()
-                    cover_frame = FrameContainer:new{
-                        width = cover_w + 2 * border_size,
-                        height = max_img + 2 * border_size,
-                        margin = 0, padding = 0, bordersize = border_size,
-                        CenterContainer:new{
-                            dimen = { w = cover_w, h = max_img },
-                            wimage,
-                        },
-                    }
-                    self.menu._has_cover_images = true
-                    self._has_cover_image = true
-                else
-                    -- Empty placeholder
-                    cover_frame = FrameContainer:new{
-                        width = cover_w + 2 * border_size,
-                        height = max_img + 2 * border_size,
-                        margin = 0, padding = 0, bordersize = border_size,
-                        background = Blitbuffer.COLOR_LIGHT_GRAY,
-                        CenterContainer:new{
-                            dimen = { w = cover_w, h = max_img },
-                            VerticalSpan:new{ width = 1 },
-                        },
-                    }
-                end
+            if self.do_cover_image and cover_widget then
                 wleft = CenterContainer:new{
                     dimen = { w = cover_zone_w, h = dimen_h },
-                    cover_frame,
+                    cover_widget,
                 }
-                self._cover_frame = cover_frame
+                self._cover_frame = cover_widget
+                self.menu._has_cover_images = true
+                self._has_cover_image = true
             end
 
-            -- Layout constants (match browser_list_item_layout)
+            -- Layout constants (same as original)
             local pad_left  = self.do_cover_image
                               and Screen:scaleBySize(6) or Screen:scaleBySize(10)
             local pad_right = Screen:scaleBySize(10)
@@ -536,7 +371,7 @@ local function apply_collections()
             local count_str  = tostring(book_count) .. " " .. (book_count == 1 and "book" or "books")
             local wright_status = TextWidget:new{
                 text    = count_str,
-                face    = Font:getFace("cfont", fs_meta),
+                face    = library_font.getFace(fs_meta),
                 fgcolor = Blitbuffer.COLOR_GRAY_3,
                 padding = 0,
             }
@@ -548,7 +383,7 @@ local function apply_collections()
 
             local wtitle = TextBoxWidget:new{
                 text      = BD.auto(display_name),
-                face      = Font:getFace("cfont", fs_title),
+                face      = library_font.getFace(fs_title),
                 width     = main_w,
                 height    = dimen_h,
                 height_adjust = true,
@@ -600,7 +435,7 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Shared sort submenu for any collection context menu
+    -- Shared sort submenu (unchanged)
     ---------------------------------------------------------------------------
     local function show_coll_sort_submenu(coll_name, close_parent, on_sort_applied)
         local ReadCollection = require("readcollection")
@@ -661,39 +496,28 @@ local function apply_collections()
         sort_dialog = ButtonDialog:new{
             title       = _g("Sort collection by"),
             title_align = "center",
-            buttons     = sort_buttons,
+            buttons     = apply_button_group_font(sort_buttons),
         }
         UIManager_ss:show(sort_dialog)
     end
 
     ---------------------------------------------------------------------------
-    -- Context menus
+    -- Context menus (unchanged - keep original)
     ---------------------------------------------------------------------------
-
     local function show_coll_item_menu(fm_coll, item, coll_list)
         if not item then return false end
         local ReadCollection = require("readcollection")
         local ButtonDialog   = require("ui/widget/buttondialog")
         local UIManager_cm   = require("ui/uimanager")
-        local util           = require("util")
         local _              = require("gettext")
 
         local coll_name    = item.name
         local is_favorites = coll_name == ReadCollection.default_collection_name
         local display_name = is_favorites and _("Favorites") or coll_name
-        local coll         = ReadCollection.coll[coll_name]
-        local book_count   = coll and util.tableSize(coll) or 0
+        local files        = get_collection_files_in_cover_order(coll_name)
+        local book_count   = #files
 
-        -- Build ordered file list for cover gallery
-        local files = {}
-        if coll then
-            local sorted = {}
-            for _, it in pairs(coll) do table.insert(sorted, it) end
-            table.sort(sorted, function(a, b) return (a.order or 0) < (b.order or 0) end)
-            for _, it in ipairs(sorted) do table.insert(files, it.file) end
-        end
-
-        -- Extra buttons appended after Sort in the shared showFileDialog dialog
+        local button_dialog
         local prepend_buttons = {}
         local extra_buttons = {}
         if not is_favorites then
@@ -704,6 +528,7 @@ local function apply_collections()
                     local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
                     local fm = ok_fm and FM and FM.instance
                     if fm then UIManager_cm:close(fm.file_chooser.file_dialog) end
+                    if button_dialog then UIManager_cm:close(button_dialog) end
                     fm_coll:renameCollection(item)
                 end,
             }})
@@ -715,6 +540,7 @@ local function apply_collections()
                 local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
                 local fm = ok_fm and FM and FM.instance
                 if fm then UIManager_cm:close(fm.file_chooser.file_dialog) end
+                if button_dialog then UIManager_cm:close(button_dialog) end
                 fm_coll:showCollFolderList(item)
             end,
         }})
@@ -726,6 +552,7 @@ local function apply_collections()
                     local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
                     local fm = ok_fm and FM and FM.instance
                     if fm then UIManager_cm:close(fm.file_chooser.file_dialog) end
+                    if button_dialog then UIManager_cm:close(button_dialog) end
                     fm_coll:removeCollection(item)
                 end,
             }})
@@ -739,33 +566,25 @@ local function apply_collections()
                 _zen_group_name      = display_name,
                 _zen_group_subtitle  = book_count == 1 and _("1 book")
                                       or (tostring(book_count) .. " " .. _("books")),
-                -- dialog closed before sort_cb fires, so close_parent is a no-op
                 _zen_sort_cb         = function() show_coll_sort_submenu(coll_name, function() end) end,
                 _zen_prepend_buttons = prepend_buttons,
                 _zen_extra_buttons   = extra_buttons,
             })
         else
-            -- FM not available: show without cover gallery
-            local button_dialog
             local buttons = {}
-            for _, row in ipairs(prepend_buttons) do table.insert(buttons, row) end
+            for _i, row in ipairs(prepend_buttons) do table.insert(buttons, row) end
             table.insert(buttons, {{
                 text     = "\u{F04BF}  " .. _("Sort") .. "  \u{25B8}",
                 align    = "left",
                 callback = function() show_coll_sort_submenu(coll_name, function() UIManager_cm:close(button_dialog) end) end,
             }})
-            for _, row in ipairs(extra_buttons) do table.insert(buttons, row) end
-            button_dialog = ButtonDialog:new{ buttons = buttons }
+            for _i, row in ipairs(extra_buttons) do table.insert(buttons, row) end
+            button_dialog = ButtonDialog:new{ buttons = apply_button_group_font(buttons) }
             UIManager_cm:show(button_dialog)
         end
         return true
     end
 
-    ---------------------------------------------------------------------------
-    -- Blank-space context menu inside a NAMED collection's book list
-    ---------------------------------------------------------------------------
-    -- fav_navbar: true when this is the favorites collection opened from the navbar.
-    -- Controls reopen target (nil vs explicit name) and which display setting is saved.
     local function show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, display_name, fav_navbar)
         local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
         local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
@@ -775,28 +594,15 @@ local function apply_collections()
         end
 
         local ButtonDialog   = require("ui/widget/buttondialog")
-        local ReadCollection = require("readcollection")
         local UIManager_nb   = require("ui/uimanager")
-        local util           = require("util")
         local _              = require("gettext")
 
-        local coll       = ReadCollection.coll[raw_coll_name]
-        local book_count = coll and util.tableSize(coll) or 0
-
-        -- Ordered file list for gallery covers
-        local files = {}
-        if coll then
-            local sorted = {}
-            for _, it in pairs(coll) do table.insert(sorted, it) end
-            table.sort(sorted, function(a, b) return (a.order or 0) < (b.order or 0) end)
-            for _, it in ipairs(sorted) do table.insert(files, it.file) end
-        end
+        local files = get_visible_files_from_menu(menu)
+            or get_collection_files_in_cover_order(raw_coll_name)
+        local book_count = #files
 
         local function reopen_collection()
             if menu then UIManager_nb:close(menu) end
-            -- fav_navbar: pass nil so favorites.lua's wrapper sees navbar open (no back button).
-            -- Cannot use `fav_navbar and nil or raw_coll_name` — Lua `and/or` ternary breaks
-            -- when the truthy-branch value is nil (nil is falsy, so `or` always takes the rhs).
             if fav_navbar then
                 fm_coll:onShowColl(nil)
             else
@@ -804,8 +610,6 @@ local function apply_collections()
             end
         end
 
-        -- Display submenu (caller must close the parent dialog first)
-        -- Favorites and named collections share collection_display_mode.
         local function showDisplaySubmenu()
             local ok_bim, bim = pcall(require, "bookinfomanager")
             local cur_mode
@@ -838,16 +642,15 @@ local function apply_collections()
             view_dialog = ButtonDialog:new{
                 title       = _("Display mode"),
                 title_align = "center",
-                buttons     = {
+                buttons     = apply_button_group_font({
                     viewBtn(_("Mosaic"),          "\u{F00A}", "mosaic_image"),
                     viewBtn(_("List (detailed)"), "\u{F03A}", "list_image_meta"),
                     viewBtn(_("List (basic)"),    "\u{F0CA}", "list_image_filename"),
-                },
+                }),
             }
             UIManager_nb:show(view_dialog)
         end
 
-        -- Reuse showFileDialog (context_menu.lua) for gallery header + button group
         local ok_fm, FM = pcall(require, "apps/filemanager/filemanager")
         local fm = ok_fm and FM and FM.instance
         if fm and fm.file_chooser and fm.file_chooser.showFileDialog then
@@ -857,7 +660,6 @@ local function apply_collections()
                 _zen_group_subtitle    = book_count == 1 and _("1 book")
                                          or (tostring(book_count) .. " " .. _("books")),
                 _zen_is_folder_view    = true,
-                -- context_menu.lua closes the dialog before invoking these callbacks
                 _zen_sort_cb           = function()
                     show_coll_sort_submenu(raw_coll_name, function() end, reopen_collection)
                 end,
@@ -867,7 +669,6 @@ local function apply_collections()
                 end,
             })
         else
-            -- Fallback: plain button dialog
             local button_dialog
             local buttons = {
                 {{
@@ -888,7 +689,7 @@ local function apply_collections()
                     end,
                 }},
             }
-            button_dialog = ButtonDialog:new{ buttons = buttons }
+            button_dialog = ButtonDialog:new{ buttons = apply_button_group_font(buttons) }
             UIManager_nb:show(button_dialog)
         end
         return true
@@ -918,7 +719,6 @@ local function apply_collections()
                 if ok3 then cur_mode = m end
             end
             local function apply_mode(mode)
-                -- Use CoverBrowser to apply new mode (saves to DB + repatches updateItemTable)
                 local cb = fm_coll.ui and fm_coll.ui.coverbrowser
                 if cb and type(cb.setupWidgetDisplayMode) == "function" then
                     pcall(cb.setupWidgetDisplayMode, "collections", mode)
@@ -947,11 +747,11 @@ local function apply_collections()
             view_dialog = ButtonDialog:new{
                 title       = _("Display mode"),
                 title_align = "center",
-                buttons     = {
+                buttons     = apply_button_group_font({
                     viewBtn(_("Mosaic"),          "\u{F00A}", "mosaic_image"),
                     viewBtn(_("List (detailed)"), "\u{F03A}", "list_image_meta"),
                     viewBtn(_("List (basic)"),    "\u{F0CA}", "list_image_filename"),
-                },
+                }),
             }
             UIManager_bm:show(view_dialog)
         end
@@ -988,20 +788,20 @@ local function apply_collections()
             }},
         }
         button_dialog = ButtonDialog:new{
-            buttons = buttons,
+            buttons = apply_button_group_font(buttons),
         }
         UIManager_bm:show(button_dialog)
         return true
     end
 
     ---------------------------------------------------------------------------
-    -- Flags set during show calls so Menu:init can detect which menu is being created
+    -- Flags set during show calls
     ---------------------------------------------------------------------------
     local _patching_coll_list  = false
     local _patching_named_coll = false
 
     ---------------------------------------------------------------------------
-    -- Menu:init hook — minimal TitleBar + optional mosaic setup
+    -- Menu:init hook
     ---------------------------------------------------------------------------
     local orig_menu_init = Menu.init
     function Menu:init()
@@ -1035,7 +835,6 @@ local function apply_collections()
             orig_menu_init(self)
         end
 
-        -- Apply collection display mode regardless of titlebar config
         if is_enabled() and is_coll_menu then
             local mode_type = setup_display_mode(self)
             if mode_type == "mosaic" then
@@ -1060,14 +859,13 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- clean_nav: customises a NAMED collection's booklist_menu
+    -- clean_nav (unchanged)
     ---------------------------------------------------------------------------
     local function clean_nav(menu, collection_name, raw_coll_name, fm_coll)
         if not menu then return end
 
         local UIManager_mod = require("ui/uimanager")
 
-        -- Guard book-item hold inside a named collection; route through Zen UI context menu.
         local orig_onMenuHold = menu.onMenuHold
         menu.onMenuHold = function(self_menu, item, pos)
             local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
@@ -1099,7 +897,6 @@ local function apply_collections()
             if orig_onMenuHold then return orig_onMenuHold(self_menu, item, pos) end
         end
 
-        -- Blank-space hold: sort and display options for this collection
         if fm_coll then
             local Device         = require("device")
             if Device:isTouchDevice() then
@@ -1116,7 +913,14 @@ local function apply_collections()
                         },
                     },
                 }
-                menu.onZenNamedCollBlankHold = function()
+                menu.onZenNamedCollBlankHold = function(self_arg, arg, ges)
+                    if ges and ges.pos and menu.item_group then
+                        for _i, iw in ipairs(menu.item_group) do
+                            if iw.dimen and iw.dimen:contains(ges.pos) then
+                                return false
+                            end
+                        end
+                    end
                     return show_named_coll_blank_menu(fm_coll, menu, raw_coll_name, collection_name)
                 end
             end
@@ -1172,7 +976,7 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- clean_nav_list: customises the COLLECTIONS LIST (coll_list) Menu
+    -- clean_nav_list (unchanged)
     ---------------------------------------------------------------------------
     local function clean_nav_list(menu, fm_coll)
         if not menu then return end
@@ -1180,12 +984,17 @@ local function apply_collections()
         local UIManager_mod = require("ui/uimanager")
         local Device        = require("device")
 
-        -- Replace onMenuHold with our context menu
-        menu.onMenuHold = function(menu_self, item)
-            return show_coll_item_menu(fm_coll, item, menu)
+        local ft = zen_plugin and zen_plugin.config and zen_plugin.config.features
+        local lc = zen_plugin and zen_plugin.config and zen_plugin.config.lockdown
+        if type(ft) == "table" and ft.lockdown_mode == true
+                and type(lc) == "table" and lc.disable_context_menu == true then
+            menu.onMenuHold = function() return true end
+        else
+            menu.onMenuHold = function(menu_self, item)
+                return show_coll_item_menu(fm_coll, item, menu)
+            end
         end
 
-        -- Add blank-space hold gesture for general menu
         if Device:isTouchDevice() then
             local GestureRange_g = require("ui/gesturerange")
             local Geom_g         = require("ui/geometry")
@@ -1202,12 +1011,18 @@ local function apply_collections()
                     },
                 },
             }
-            menu.onZenCollBlankHold = function()
+            menu.onZenCollBlankHold = function(self_arg, arg, ges)
+                if ges and ges.pos and menu.item_group then
+                    for _i, iw in ipairs(menu.item_group) do
+                        if iw.dimen and iw.dimen:contains(ges.pos) then
+                            return false
+                        end
+                    end
+                end
                 return show_coll_blank_menu(fm_coll)
             end
         end
 
-        -- Status bar in titlebar
         local tb = menu.title_bar
         if not tb then return end
 
@@ -1244,7 +1059,7 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Hook onShowColl (named collection view)
+    -- Hook onShowColl
     ---------------------------------------------------------------------------
     local orig_onShowColl = FileManagerCollection.onShowColl
     function FileManagerCollection:onShowColl(collection_name)
@@ -1255,9 +1070,6 @@ local function apply_collections()
             or (ok and resolved_name == ReadCollection.default_collection_name)
 
         if is_enabled() then
-            -- Cache mode now; CoverBrowser may overwrite collection_display_mode in DB
-            -- during updateCollectionFromFolder (called inside orig_onShowColl before
-            -- BookList:new), so Menu:init must not read from DB.
             local ok_bim, bim = pcall(require, "bookinfomanager")
             if ok_bim then
                 _coll_display_mode_override = bim:getSetting("collection_display_mode")
@@ -1271,9 +1083,6 @@ local function apply_collections()
         if not is_enabled() then return end
 
         if is_favorites and collection_name == nil then
-            -- Favorites accessed from the navbar: favorites.lua owns clean_nav,
-            -- but still wire up the blank-space hold so it shows the same
-            -- context menu as a named collection's blank-space hold.
             local menu = self.booklist_menu
             if menu and is_enabled() then
                 local _ = require("gettext")
@@ -1295,7 +1104,14 @@ local function apply_collections()
                             },
                         },
                     }
-                    menu.onZenNamedCollBlankHold = function()
+                    menu.onZenNamedCollBlankHold = function(self_arg, arg, ges)
+                        if ges and ges.pos and menu.item_group then
+                            for _i, iw in ipairs(menu.item_group) do
+                                if iw.dimen and iw.dimen:contains(ges.pos) then
+                                    return false
+                                end
+                            end
+                        end
                         return show_named_coll_blank_menu(fm_coll, menu, raw_fav, fav_display, true)
                     end
                 end
@@ -1313,7 +1129,7 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Prevent partial-row centering on subsequent updateCollListItemTable calls
+    -- Prevent partial-row centering
     ---------------------------------------------------------------------------
     local orig_updateCollListItemTable = FileManagerCollection.updateCollListItemTable
     function FileManagerCollection:updateCollListItemTable(...)
@@ -1324,13 +1140,12 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Hook onShowCollList (collections list view — browse mode only)
+    -- Hook onShowCollList
     ---------------------------------------------------------------------------
     local orig_onShowCollList = FileManagerCollection.onShowCollList
     function FileManagerCollection:onShowCollList(file_or_selected_collections, caller_callback, no_dialog)
         local is_browse = file_or_selected_collections == nil
 
-        -- Set flag so Menu:init sets up display mode (+ minimal TitleBar when status bar is active)
         if is_browse and is_enabled() then
             _patching_coll_list = true
         end
@@ -1347,15 +1162,12 @@ local function apply_collections()
     end
 
     ---------------------------------------------------------------------------
-    -- Collections search: whole-word match, skip "description" field.
-    -- findInProps temporarily swapped so the Trapper subprocess fork inherits the patch.
+    -- Collections search patch (unchanged)
     ---------------------------------------------------------------------------
     local _orig_searchCollections = FileManagerCollection.searchCollections
     if _orig_searchCollections then
         local util_lower = require("util").stringLower
 
-        -- Word char: ASCII alnum/_ OR leading byte of any UTF-8 multi-byte
-        -- sequence (≥ 0x80), identical to is_word_byte in search.lua.
         local function is_word_byte(b)
             return (b >= 48 and b <= 57)
                 or (b >= 65 and b <= 90)
@@ -1364,7 +1176,6 @@ local function apply_collections()
                 or b >= 128
         end
 
-        -- Whole-word substring search (identical logic to search.lua).
         local function find_whole_word(text, pattern)
             if #pattern == 0 then return false end
             local i = 1
@@ -1385,12 +1196,10 @@ local function apply_collections()
             end
 
             local orig_findInProps = bookinfo.findInProps
-            -- Replace for this search: skip "description", whole-word match,
-            -- case-fold when case_sensitive is false (CheckButton.checked).
             bookinfo.findInProps = function(info, book_props, search_str, case_sensitive)
-                local fold = not case_sensitive  -- true = case-insensitive mode
+                local fold = not case_sensitive
                 local needle = fold and util_lower(search_str) or search_str
-                for _, key in ipairs(info.props) do
+                for _i, key in ipairs(info.props) do
                     if key ~= "description" then
                         local prop = book_props[key]
                         if prop then

@@ -756,12 +756,14 @@ function M.build_install_pages(ctx)
                 { id = "keep",          text = _("Keep existing settings"),         checked = true  },
                 { id = "cover_black",   text = _("Book cover - black background"), checked = false },
                 { id = "zen_white",     text = _("Zen icon - white background"),   checked = false },
+                { id = "zen_black",     text = _("Zen icon - black background"),   checked = false },
             },
             on_apply = function(sel)
                 if sel["keep"] then return end
                 local preset
                 if     sel["cover_black"] then preset = builtin_presets[1]
                 elseif sel["zen_white"]   then preset = builtin_presets[2]
+                elseif sel["zen_black"]   then preset = builtin_presets[4]
                 end
                 if preset then
                     apply_screensaver_preset(preset)

@@ -17,13 +17,16 @@ function M.build(ctx)
     local save_and_apply = ctx.save_and_apply
     local apply_feature  = ctx.apply_feature
 
-    -- For config-only changes (visibility, styling), reinject directly so the
-    -- navbar rebuilds immediately in the widget tree and shows correct tabs as
-    -- soon as the menu closes -- no deferred polling needed.
+    -- Defer reinject to next event loop tick so the menu's post-callback
+    -- redraws complete first, then the navbar repaints correctly.
     local function save_and_apply_navbar()
         ctx.plugin:saveConfig()
         local reinject = rawget(_G, "__ZEN_UI_REINJECT_FM_NAVBAR")
-        if reinject then reinject() else save_and_apply("navbar") end
+        if reinject then
+            UIManager:scheduleIn(0, reinject)
+        else
+            save_and_apply("navbar")
+        end
     end
 
     local function make_enable_feature_item(feature, text)
@@ -134,29 +137,16 @@ function M.build(ctx)
     local CUSTOM_TAB_ICONS
     local function getCustomTabIcons()
         if CUSTOM_TAB_ICONS then return CUSTOM_TAB_ICONS end
+        local utils = require("common/utils")
+        local ok_root, root = pcall(require, "common/plugin_root")
         local excluded = { zen_ui_light = true, zen_ui_update = true }
-        local icons = {}
-        local ok_lfs, lfs_mod = pcall(require, "libs/libkoreader-lfs")
-        local root = ok_lfs and lfs_mod and require("common/plugin_root")
-        if root then
-            local icons_dir = root .. "/icons"
-            for f in lfs_mod.dir(icons_dir) do
-                if f:match("%.svg$") and not f:match("%.bak%.svg$") then
-                    local name = f:sub(1, -5)
-                    if not excluded[name] then icons[#icons + 1] = name end
-                end
-            end
-            table.sort(icons)
-        end
-        CUSTOM_TAB_ICONS = icons
+        CUSTOM_TAB_ICONS = utils.getIconPickerList(ok_root and root or nil, excluded)
         return CUSTOM_TAB_ICONS
     end
 
     local _icon_picker = require("common/zen_icon_picker")
     local function showTabIconPicker(ct, on_select)
-        local ok_root, root = pcall(require, "common/plugin_root")
-        if not ok_root or not root then return end
-        _icon_picker(getCustomTabIcons(), root .. "/icons", ct.icon, on_select)
+        _icon_picker(getCustomTabIcons(), ct.icon, on_select)
     end
 
     local build_ct_sub_items  -- forward decl
@@ -749,103 +739,25 @@ function M.build(ctx)
                             save_and_apply_navbar()
                         end,
                     },
-                    {
-                        text_func = function()
-                            local c = ensure_navbar_color()
-                            return _("Active tab color: ") .. string.format("%d,%d,%d", c[1], c[2], c[3])
+                    utils.buildColorSubMenu({
+                        label        = _("Active tab color: "),
+                        get          = ensure_navbar_color,
+                        set          = function(r, g, b)
+                            set_navbar_color(r, g, b)
+                            save_and_apply_navbar()
                         end,
                         enabled_func = function()
-                            return config.navbar.active_tab_styling == true and config.navbar.colored == true
+                            return config.navbar.active_tab_styling == true
+                                and config.navbar.colored == true
                         end,
-                        sub_item_table = {
-                            {
-                                text = _("Blue"),
-                                checked_func = function()
-                                    local c = ensure_navbar_color()
-                                    return c[1] == 0x33 and c[2] == 0x99 and c[3] == 0xFF
-                                end,
-                                callback = function()
-                                    set_navbar_color(0x33, 0x99, 0xFF)
-                                    save_and_apply_navbar()
-                                end,
-                            },
-                            {
-                                text = _("Green"),
-                                checked_func = function()
-                                    local c = ensure_navbar_color()
-                                    return c[1] == 0x33 and c[2] == 0xAA and c[3] == 0x55
-                                end,
-                                callback = function()
-                                    set_navbar_color(0x33, 0xAA, 0x55)
-                                    save_and_apply_navbar()
-                                end,
-                            },
-                            {
-                                text = _("Amber"),
-                                checked_func = function()
-                                    local c = ensure_navbar_color()
-                                    return c[1] == 0xFF and c[2] == 0xAA and c[3] == 0x00
-                                end,
-                                callback = function()
-                                    set_navbar_color(0xFF, 0xAA, 0x00)
-                                    save_and_apply_navbar()
-                                end,
-                            },
-                            {
-                                text = _("Red"),
-                                checked_func = function()
-                                    local c = ensure_navbar_color()
-                                    return c[1] == 0xDD and c[2] == 0x33 and c[3] == 0x33
-                                end,
-                                callback = function()
-                                    set_navbar_color(0xDD, 0x33, 0x33)
-                                    save_and_apply_navbar()
-                                end,
-                            },
-                            {
-                                text_func = function()
-                                    local c = ensure_navbar_color()
-                                    return _("Custom RGB") .. " (" .. string.format("%d,%d,%d", c[1], c[2], c[3]) .. ")"
-                                end,
-                                keep_menu_open = true,
-                                callback = function(touchmenu_instance)
-                                    local InputDialog = require("ui/widget/inputdialog")
-                                    local c = ensure_navbar_color()
-                                    local dlg
-                                    dlg = InputDialog:new{
-                                        title = _("Active tab RGB"),
-                                        input = string.format("%d,%d,%d", c[1], c[2], c[3]),
-                                        hint = _("Format: R,G,B (0-255)"),
-                                        buttons = {{
-                                            {
-                                                text = _("Cancel"),
-                                                id = "close",
-                                                callback = function() UIManager:close(dlg) end,
-                                            },
-                                            {
-                                                text = _("Set"),
-                                                is_enter_default = true,
-                                                callback = function()
-                                                    local text = dlg:getInputText() or ""
-                                                    local r, g, b = text:match("^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
-                                                    if r and g and b then
-                                                        set_navbar_color(tonumber(r), tonumber(g), tonumber(b))
-                                                        UIManager:close(dlg)
-                                                        save_and_apply_navbar()
-                                                        if touchmenu_instance then
-                                                            touchmenu_instance:updateItems()
-                                                        end
-                                                    end
-                                                end,
-                                            },
-                                        }},
-                                    }
-                                    UIManager:show(dlg)
-                                    dlg:onShowKeyboard()
-                                end,
-                            },
+                        dialog_title = _("Active tab RGB"),
+                        presets = {
+                            { text = _("Blue"),  r = 0x33, g = 0x99, b = 0xFF },
+                            { text = _("Green"), r = 0x33, g = 0xAA, b = 0x55 },
+                            { text = _("Amber"), r = 0xFF, g = 0xAA, b = 0x00 },
+                            { text = _("Red"),   r = 0xDD, g = 0x33, b = 0x33 },
                         },
-                    },
+                    }),
                     {
                         text = _("Refresh navbar"),
                         keep_menu_open = true,
