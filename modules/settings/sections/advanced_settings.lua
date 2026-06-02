@@ -17,6 +17,19 @@ function M.build(ctx)
     local items = {}
 
     table.insert(items, {
+        text = _("Bible Mode"),
+        help_text = _("Enable a dedicated Bible tab in the navigation bar and translation management in settings."),
+        checked_func = function()
+            return config.features.bible_mode ~= false
+        end,
+        callback = function()
+            config.features.bible_mode = not (config.features.bible_mode ~= false)
+            plugin:saveConfig()
+            settings_apply.prompt_restart()
+        end,
+    })
+
+    table.insert(items, {
         text = _("Extract metadata"),
         help_text = _("Extract and cache book metadata and cover images for books in the current directory. Requires CoverBrowser plugin."),
         callback = function()

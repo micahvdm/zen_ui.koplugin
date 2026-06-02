@@ -23,6 +23,9 @@ return {
         "Fix: language defaulting to english after plugin restart",
         "Bug fixes and performance improvements",
     },
+    ["1.0.3-1"] = {
+        "New: Zen Bible Mode module with dedicated Navbar tab",
+        "New: Dynamic Bible scanning, folder picker, and Daily Verse feature",
     ["1.1.0"] = {
         "Add scroll bar with page numbers, jump to page, and buttons + skip (Library > Scroll bar)",
         "Add title/author strip (Library > Covers)",

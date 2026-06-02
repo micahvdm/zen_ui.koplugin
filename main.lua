@@ -188,6 +188,45 @@ function ZenUI:init()
         end
     end
 
+    -- First-run: initialize bible mode feature flag.
+    if self.config.features.bible_mode == nil then
+        self.config.features.bible_mode = true
+    end
+
+    -- First-run: initialize bible mode config if missing.
+    if not self.config.bible_mode then
+        self.config.bible_mode = {
+            enabled = true,
+        }
+        -- Ensure the tab is visible and correctly positioned for existing users.
+        if type(self.config.navbar) == "table" then
+            if type(self.config.navbar.show_tabs) == "table" then
+                self.config.navbar.show_tabs.bible = true
+            end
+            if type(self.config.navbar.tab_order) == "table" then
+                local found = false
+                for _, id in ipairs(self.config.navbar.tab_order) do
+                    if id == "bible" then found = true; break end
+                end
+                if not found then
+                    local inserted = false
+                    for i, id in ipairs(self.config.navbar.tab_order) do
+                        if id == "news" then
+                            table.insert(self.config.navbar.tab_order, i + 1, "bible")
+                            inserted = true
+                            break
+                        end
+                    end
+                    if not inserted then
+                        table.insert(self.config.navbar.tab_order, "bible")
+                    end
+                end
+            end
+        end
+        -- Defaults will be merged by the bible_mode module on init.
+        self:saveConfig()
+    end
+
     -- First-run: default to swipe-only menu activation (KOReader default is tap+swipe).
     if not self.config._meta.menu_activation_defaulted then
         G_reader_settings:saveSetting("activation_menu", "swipe")
