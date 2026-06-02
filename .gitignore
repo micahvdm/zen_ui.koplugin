@@ -6,4 +6,5 @@ ___pycache___
 *.pyc
 .venv
 build
-bibles
+.luarocks
+AGENTS.md
