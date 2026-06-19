@@ -189,7 +189,7 @@ Please follow these guidelines:
 
 ## FAQ/Community
 
-Feel free to join the [Discord Community](https://discord.gg/wb6p2JMJYM) if you want to get help/chat/contribute
+Feel free to join the [Discord Community](https://discord.gg/GGUEXctJT) if you want to get help/chat/contribute
 
 ## Security
 
